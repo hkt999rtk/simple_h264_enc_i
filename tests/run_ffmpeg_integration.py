@@ -370,7 +370,6 @@ def main():
 
     for pix_fmt in ("yuvj420p", "yuvj422p", "yuvj444p"):
         jpeg_input = workdir / f"input_720p_{pix_fmt}.jpg"
-        streaming_output = None
         make_color_jpeg(args, jpeg_input, pix_fmt)
         if pix_fmt == "yuvj420p":
             run_expect_fail([
@@ -382,16 +381,16 @@ def main():
                 str(jpeg_input),
                 str(workdir / "output_jpeg_arena_too_small.h264"),
             ], stderr_contains="buffer too small")
-            streaming_output = workdir / "output_jpeg_streaming_yuvj420p_i420.h264"
-            encode_jpeg_streaming_prototype(args, jpeg_input, streaming_output)
-            validate_bitstream(args.ffprobe, args.ffmpeg, streaming_output)
+        streaming_output = workdir / f"output_jpeg_streaming_{pix_fmt}_i420.h264"
+        encode_jpeg_streaming_prototype(args, jpeg_input, streaming_output)
+        validate_bitstream(args.ffprobe, args.ffmpeg, streaming_output)
         for fmt in ("i420", "nv12"):
             jpeg_output = workdir / f"output_jpeg_{pix_fmt}_{fmt}.h264"
             encode_jpeg(args, fmt, jpeg_input, jpeg_output)
             validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
-            if pix_fmt == "yuvj420p" and fmt == "i420":
+            if fmt == "i420":
                 compare_decoded_i420(args, jpeg_output, streaming_output,
-                                     "output_jpeg_yuvj420p_i420_streaming_compare")
+                                     f"output_jpeg_{pix_fmt}_i420_streaming_compare")
 
     if args.cjpeg:
         restart_jpeg_input = workdir / "input_720p_yuvj420p_restart.jpg"

@@ -99,9 +99,10 @@ typedef sh264e_status_t (*sh264e_jpeg_row_ready_fn)(
 
 The first production API does not need to expose this callback publicly. The
 current prototype keeps it internal and exercises it through
-`sh264e_encode_jpeg --streaming-prototype` for a 1280x720 4:2:0 I420 output
-fixture. A public streaming API should wait until the prototype proves the
-row-cache contract across the rest of the supported JPEG matrix.
+`sh264e_encode_jpeg --streaming-prototype` for 1280x720 4:2:0, 4:2:2, and
+4:4:4 YCbCr inputs to I420 output. A public streaming API should wait until
+the prototype proves the row-cache contract across the rest of the supported
+JPEG matrix.
 
 ## Memory Estimate
 
@@ -121,8 +122,8 @@ height. Approximate component-cache sizes are:
 | Source | MCU-row bytes | Retained rows | Approx cache |
 | --- | ---: | ---: | ---: |
 | 1280x720 4:2:0 | 30,720 | 2 MCU rows | 61,440 |
-| 1280x720 4:2:2 | 30,720 | 2 MCU rows | 61,440 |
-| 1280x720 4:4:4 | 30,720 | 2 MCU rows | 61,440 |
+| 1280x720 4:2:2 | 40,960 | 2 MCU rows | 81,920 |
+| 1280x720 4:4:4 | 61,440 | 2 MCU rows | 122,880 |
 | 5120x2880 4:2:0 | 122,880 | 3 MCU rows | 368,640 |
 | 5120x2880 4:4:4 | 122,880 | 5 MCU rows | 614,400 |
 
@@ -136,15 +137,18 @@ output buffer, both of which are already caller-controlled.
 The prototype adds a tool/test-only path before replacing the default JPEG
 encoder:
 
-* Generate a `1280x720` `yuvj420p` JPEG fixture with ffmpeg.
+* Generate `1280x720` `yuvj420p`, `yuvj422p`, and `yuvj444p` JPEG fixtures
+  with ffmpeg.
 * Encode through the streaming prototype to Annex B H.264.
 * Decode the H.264 with ffmpeg and verify the same stream metadata as the
   component-plane path.
 * Decode both the streaming and component-plane H.264 outputs to raw `yuv420p`
-  and compare SHA-256 hashes for the first 1280x720 4:2:0 I420 fixture.
+  and compare SHA-256 hashes for each I420 fixture.
 * Confirm the NanoJPEG allocation peak is below the 1,382,400-byte full
-  component-plane allocation for the same fixture.
+  component-plane allocation for the 4:2:0 fixture and below the corresponding
+  full component-plane allocation for 4:2:2 and 4:4:4.
 * When `cjpeg` is available, generate a 4:2:0 fixture with DRI/RST restart
   markers and run the same streaming-vs-component decoded-frame comparison.
 * Keep the component-plane arena path as the compatibility fallback until the
-  streaming path covers grayscale, 4:2:0, 4:2:2, and 4:4:4.
+  streaming path covers grayscale and the production API/promotion boundary is
+  decided.

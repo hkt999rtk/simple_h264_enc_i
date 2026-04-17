@@ -882,14 +882,24 @@ static void streaming_free_cache(sh264e_jpeg_stream_context_t *ctx)
 static sh264e_status_t streaming_init_cache(sh264e_jpeg_stream_context_t *ctx)
 {
     const int component_count = njGetComponentCount();
+    const int y_width = njGetComponentWidth(0);
+    const int y_height = njGetComponentHeight(0);
+    const int cb_width = njGetComponentWidth(1);
+    const int cb_height = njGetComponentHeight(1);
+    const int cr_width = njGetComponentWidth(2);
+    const int cr_height = njGetComponentHeight(2);
     unsigned i;
 
     if (component_count != 3 || njGetWidth() != 1280 || njGetHeight() != 720) {
         return SH264E_ERR_UNSUPPORTED_CONFIG;
     }
-    if (njGetComponentSsx(0) != 2 || njGetComponentSsy(0) != 2 ||
-        njGetComponentSsx(1) != 1 || njGetComponentSsy(1) != 1 ||
-        njGetComponentSsx(2) != 1 || njGetComponentSsy(2) != 1) {
+    if (y_width != 1280 || y_height != 720 ||
+        cb_width != cr_width || cb_height != cr_height) {
+        return SH264E_ERR_UNSUPPORTED_CONFIG;
+    }
+    if (!((cb_width == 640 && cb_height == 360) ||
+          (cb_width == 640 && cb_height == 720) ||
+          (cb_width == 1280 && cb_height == 720))) {
         return SH264E_ERR_UNSUPPORTED_CONFIG;
     }
 
