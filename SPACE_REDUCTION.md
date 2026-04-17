@@ -277,6 +277,9 @@ encoder slice work buffer, and the H.264 output buffer.
   `sh264e_encode_jpeg --streaming-prototype`, including a `cjpeg`-generated
   DRI/RST restart-marker fixture when `cjpeg` is available, then expand to
   grayscale before making it the default JPEG path.
+* Keep the row-window bridge hidden for this prototype. Promotion to the
+  production/default JPEG path should wait for dynamic source-size cache sizing,
+  caller-provided arena integration, NV12 output, and grayscale coverage.
 
 ### Risks
 

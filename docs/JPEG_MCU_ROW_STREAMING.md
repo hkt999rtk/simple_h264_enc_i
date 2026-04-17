@@ -104,6 +104,27 @@ current prototype keeps it internal and exercises it through
 the prototype proves the row-cache contract across the rest of the supported
 JPEG matrix.
 
+## Promotion Decision
+
+The row-window bridge should remain a hidden prototype for issue #5 instead of
+becoming the production default in this PR. The prototype proves the MCU-row
+decode and scaler handoff for the 1280x720 color matrix, including restart
+markers, but it still has production-boundary gaps:
+
+* The only exposed entry point is the tool-local `--streaming-prototype` path.
+* The prototype output is I420-only and does not cover the public NV12 JPEG
+  output path.
+* The source-size policy is fixed at 1280x720 rather than the existing public
+  JPEG range.
+* Row-cache allocation still uses `malloc` and is not integrated with the
+  caller-provided JPEG arena sizing API.
+* Grayscale handling is intentionally left on the component-plane fallback.
+
+Promotion should happen in a follow-up after the internal row-window contract
+can compute cache size from arbitrary supported dimensions, share the
+caller-provided arena policy, and pass the full public JPEG output matrix. Until
+then, the component-plane arena path remains the production/default JPEG path.
+
 ## Memory Estimate
 
 The current component-plane path stores the whole decoded image. From the
@@ -149,6 +170,7 @@ encoder:
   full component-plane allocation for 4:2:2 and 4:4:4.
 * When `cjpeg` is available, generate a 4:2:0 fixture with DRI/RST restart
   markers and run the same streaming-vs-component decoded-frame comparison.
-* Keep the component-plane arena path as the compatibility fallback until the
-  streaming path covers grayscale and the production API/promotion boundary is
-  decided.
+* Keep the component-plane arena path as the production fallback; the issue #5
+  decision is to leave the row-window bridge hidden until a follow-up promotes
+  it with arena sizing, dynamic source dimensions, NV12 output, and grayscale
+  coverage.
