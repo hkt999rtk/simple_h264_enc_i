@@ -109,6 +109,10 @@ sh264e_status_t sh264e_resize_make_slice(const sh264e_frame_t *src_frame,
 
 sh264e_status_t sh264e_jpeg_get_slice_buffer_size(size_t *out_size);
 
+sh264e_status_t sh264e_jpeg_get_work_size(const uint8_t *jpeg_data,
+                                          size_t jpeg_size,
+                                          size_t *out_size);
+
 sh264e_status_t sh264e_jpeg_get_last_allocation_stats(sh264e_jpeg_allocation_stats_t *out_stats);
 
 sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
@@ -119,6 +123,17 @@ sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
                                        uint8_t *out,
                                        size_t out_capacity,
                                        size_t *out_size);
+
+sh264e_status_t sh264e_encode_jpeg_idr_with_arena(sh264e_encoder_t *encoder,
+                                                  const uint8_t *jpeg_data,
+                                                  size_t jpeg_size,
+                                                  uint8_t *jpeg_arena,
+                                                  size_t jpeg_arena_size,
+                                                  uint8_t *work_buffer,
+                                                  size_t work_buffer_capacity,
+                                                  uint8_t *out,
+                                                  size_t out_capacity,
+                                                  size_t *out_size);
 
 const char *sh264e_status_string(sh264e_status_t status);
 
