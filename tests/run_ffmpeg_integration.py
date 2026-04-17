@@ -208,6 +208,48 @@ def make_color_jpeg(args, path, pix_fmt):
     validate_image_pix_fmt(args.ffprobe, path, pix_fmt)
 
 
+def make_restart_marker_jpeg(args, path):
+    ppm = path.with_suffix(".ppm")
+    with ppm.open("wb") as f:
+        f.write(f"P6\n{SMALL_WIDTH} {SMALL_HEIGHT}\n255\n".encode("ascii"))
+        for y in range(SMALL_HEIGHT):
+            row = bytearray()
+            for x in range(SMALL_WIDTH):
+                row.extend((
+                    (x // 5 + y // 3) & 0xFF,
+                    (64 + x // 7) & 0xFF,
+                    (192 + y // 5) & 0xFF,
+                ))
+            f.write(row)
+    run([
+        args.cjpeg,
+        "-baseline",
+        "-quality",
+        "85",
+        "-sample",
+        "2x2,1x1,1x1",
+        "-restart",
+        "1",
+        "-outfile",
+        str(path),
+        str(ppm),
+    ])
+    validate_image_pix_fmt(args.ffprobe, path, "yuvj420p")
+    validate_jpeg_restart_markers(path)
+
+
+def validate_jpeg_restart_markers(path):
+    data = path.read_bytes()
+    if b"\xff\xdd" not in data:
+        raise RuntimeError(f"{path} is missing a JPEG DRI marker")
+    restart_count = 0
+    for i in range(len(data) - 1):
+        if data[i] == 0xFF and 0xD0 <= data[i + 1] <= 0xD7:
+            restart_count += 1
+    if restart_count == 0:
+        raise RuntimeError(f"{path} is missing JPEG RST markers")
+
+
 def encode_jpeg(args, fmt, jpeg_input, bitstream):
     result = run_capture([args.jpeg_encoder, "--format", fmt, str(jpeg_input), str(bitstream)])
     if "jpeg current allocation bytes: 0" not in result.stdout:
@@ -254,6 +296,7 @@ def main():
     parser.add_argument("--jpeg-encoder", required=True)
     parser.add_argument("--ffprobe", required=True)
     parser.add_argument("--ffmpeg", required=True)
+    parser.add_argument("--cjpeg")
     parser.add_argument("--workdir", required=True)
     args = parser.parse_args()
 
@@ -349,6 +392,18 @@ def main():
             if pix_fmt == "yuvj420p" and fmt == "i420":
                 compare_decoded_i420(args, jpeg_output, streaming_output,
                                      "output_jpeg_yuvj420p_i420_streaming_compare")
+
+    if args.cjpeg:
+        restart_jpeg_input = workdir / "input_720p_yuvj420p_restart.jpg"
+        make_restart_marker_jpeg(args, restart_jpeg_input)
+        restart_streaming_output = workdir / "output_jpeg_streaming_yuvj420p_restart_i420.h264"
+        restart_jpeg_output = workdir / "output_jpeg_yuvj420p_restart_i420.h264"
+        encode_jpeg_streaming_prototype(args, restart_jpeg_input, restart_streaming_output)
+        validate_bitstream(args.ffprobe, args.ffmpeg, restart_streaming_output)
+        encode_jpeg(args, "i420", restart_jpeg_input, restart_jpeg_output)
+        validate_bitstream(args.ffprobe, args.ffmpeg, restart_jpeg_output)
+        compare_decoded_i420(args, restart_jpeg_output, restart_streaming_output,
+                             "output_jpeg_yuvj420p_restart_i420_streaming_compare")
 
     grayscale_jpeg_input = workdir / "input_gray_720p.jpg"
     run([

@@ -144,6 +144,7 @@ encoder:
   and compare SHA-256 hashes for the first 1280x720 4:2:0 I420 fixture.
 * Confirm the NanoJPEG allocation peak is below the 1,382,400-byte full
   component-plane allocation for the same fixture.
-* Add fixtures with restart markers before treating restart handling as done.
+* When `cjpeg` is available, generate a 4:2:0 fixture with DRI/RST restart
+  markers and run the same streaming-vs-component decoded-frame comparison.
 * Keep the component-plane arena path as the compatibility fallback until the
   streaming path covers grayscale, 4:2:0, 4:2:2, and 4:4:4.

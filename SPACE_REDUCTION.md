@@ -274,8 +274,9 @@ encoder slice work buffer, and the H.264 output buffer.
 * Preserve restart marker handling by resetting DC predictors and bitstream
   state at the same MCU intervals as the current full-plane path.
 * Validate a 1280x720 4:2:0 fixture first with
-  `sh264e_encode_jpeg --streaming-prototype`, then expand to 4:2:2, 4:4:4,
-  and grayscale before making it the default JPEG path.
+  `sh264e_encode_jpeg --streaming-prototype`, including a `cjpeg`-generated
+  DRI/RST restart-marker fixture when `cjpeg` is available, then expand to
+  4:2:2, 4:4:4, and grayscale before making it the default JPEG path.
 
 ### Risks
 
