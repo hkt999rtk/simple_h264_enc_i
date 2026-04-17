@@ -174,6 +174,30 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream):
     raise RuntimeError(f"JPEG encoder did not report peak allocation bytes: {result.stdout!r}")
 
 
+def encode_jpeg_streaming_prototype(args, jpeg_input, bitstream):
+    result = run_capture([
+        args.jpeg_encoder,
+        "--streaming-prototype",
+        "--format",
+        "i420",
+        str(jpeg_input),
+        str(bitstream),
+    ])
+    if "jpeg current allocation bytes: 0" not in result.stdout:
+        raise RuntimeError(f"streaming JPEG prototype leaked tracked allocations: {result.stdout!r}")
+    peak = None
+    cache = None
+    for line in result.stdout.splitlines():
+        if line.startswith("jpeg peak allocation bytes:"):
+            peak = int(line.rsplit(" ", 1)[1])
+        if line.startswith("jpeg streaming cache bytes:"):
+            cache = int(line.rsplit(" ", 1)[1])
+    if peak is None or peak >= 1382400:
+        raise RuntimeError(f"streaming JPEG prototype did not reduce NanoJPEG allocation peak: {result.stdout!r}")
+    if cache is None or cache == 0:
+        raise RuntimeError(f"streaming JPEG prototype did not report cache bytes: {result.stdout!r}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--encoder", required=True)
@@ -266,6 +290,9 @@ def main():
                 str(jpeg_input),
                 str(workdir / "output_jpeg_arena_too_small.h264"),
             ], stderr_contains="buffer too small")
+            streaming_output = workdir / "output_jpeg_streaming_yuvj420p_i420.h264"
+            encode_jpeg_streaming_prototype(args, jpeg_input, streaming_output)
+            validate_bitstream(args.ffprobe, args.ffmpeg, streaming_output)
         for fmt in ("i420", "nv12"):
             jpeg_output = workdir / f"output_jpeg_{pix_fmt}_{fmt}.h264"
             encode_jpeg(args, fmt, jpeg_input, jpeg_output)

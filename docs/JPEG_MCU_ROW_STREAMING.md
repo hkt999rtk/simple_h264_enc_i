@@ -97,9 +97,11 @@ typedef sh264e_status_t (*sh264e_jpeg_row_ready_fn)(
     void *user);
 ```
 
-The first production API does not need to expose this callback publicly. It can
-remain an internal bridge from NanoJPEG to the existing slice scaler. A public
-streaming API should wait until the prototype proves the row-cache contract.
+The first production API does not need to expose this callback publicly. The
+current prototype keeps it internal and exercises it through
+`sh264e_encode_jpeg --streaming-prototype` for a 1280x720 4:2:0 I420 output
+fixture. A public streaming API should wait until the prototype proves the
+row-cache contract across the rest of the supported JPEG matrix.
 
 ## Memory Estimate
 
@@ -118,7 +120,7 @@ height. Approximate component-cache sizes are:
 
 | Source | MCU-row bytes | Retained rows | Approx cache |
 | --- | ---: | ---: | ---: |
-| 1280x720 4:2:0 | 30,720 | 1 MCU row | 30,720 |
+| 1280x720 4:2:0 | 30,720 | 2 MCU rows | 61,440 |
 | 1280x720 4:2:2 | 30,720 | 2 MCU rows | 61,440 |
 | 1280x720 4:4:4 | 30,720 | 2 MCU rows | 61,440 |
 | 5120x2880 4:2:0 | 122,880 | 3 MCU rows | 368,640 |
@@ -131,13 +133,15 @@ output buffer, both of which are already caller-controlled.
 
 ## Validation Plan
 
-The first prototype should add a tool/test-only path before replacing the
-default JPEG encoder:
+The prototype adds a tool/test-only path before replacing the default JPEG
+encoder:
 
 * Generate a `1280x720` `yuvj420p` JPEG fixture with ffmpeg.
 * Encode through the streaming prototype to Annex B H.264.
 * Decode the H.264 with ffmpeg and verify the same stream metadata as the
   component-plane path.
+* Confirm the NanoJPEG allocation peak is below the 1,382,400-byte full
+  component-plane allocation for the same fixture.
 * Compare representative slice checksums or pixels against the component-plane
   scaler output to catch row-window lifetime mistakes.
 * Add fixtures with restart markers before treating restart handling as done.

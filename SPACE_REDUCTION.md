@@ -256,7 +256,7 @@ Approximate component-cache targets from the design note:
 
 | Source | Full component planes | Approx streaming cache |
 | --- | ---: | ---: |
-| 1280x720 4:2:0 | 1,382,400 | 30,720 |
+| 1280x720 4:2:0 | 1,382,400 | 61,440 |
 | 1280x720 4:2:2 | 1,843,200 | 61,440 |
 | 1280x720 4:4:4 | 2,764,800 | 61,440 |
 | 5120x2880 4:2:0 | not yet measured | 368,640 |
@@ -273,8 +273,9 @@ encoder slice work buffer, and the H.264 output buffer.
   non-power-of-two sampling, and non-interleaved multi-scan JPEGs.
 * Preserve restart marker handling by resetting DC predictors and bitstream
   state at the same MCU intervals as the current full-plane path.
-* Validate a 1280x720 4:2:0 fixture first, then expand to 4:2:2, 4:4:4, and
-  grayscale before making it the default JPEG path.
+* Validate a 1280x720 4:2:0 fixture first with
+  `sh264e_encode_jpeg --streaming-prototype`, then expand to 4:2:2, 4:4:4,
+  and grayscale before making it the default JPEG path.
 
 ### Risks
 
