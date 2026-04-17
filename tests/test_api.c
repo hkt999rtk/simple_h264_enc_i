@@ -160,6 +160,7 @@ int main(void)
     size_t header_capacity = 0;
     size_t slice_capacity = 0;
     size_t output_size = 0;
+    size_t jpeg_work_size = 0;
     uint8_t *slice_output = NULL;
     uint8_t *small_input = NULL;
     uint8_t *resize_work = NULL;
@@ -201,6 +202,16 @@ int main(void)
     }
     ok &= expect_status("null JPEG allocation stats",
                         sh264e_jpeg_get_last_allocation_stats(NULL),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("null JPEG work-size input",
+                        sh264e_jpeg_get_work_size(NULL, 1u, &jpeg_work_size),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("null JPEG work-size output",
+                        sh264e_jpeg_get_work_size((const uint8_t *)"x", 1u, NULL),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("null JPEG arena encode",
+                        sh264e_encode_jpeg_idr_with_arena(NULL, NULL, 0u, NULL, 0u,
+                                                          NULL, 0u, NULL, 0u, NULL),
                         SH264E_ERR_INVALID_ARGUMENT);
     jpeg_alloc_stats.current_bytes = 123u;
     jpeg_alloc_stats.peak_bytes = 456u;

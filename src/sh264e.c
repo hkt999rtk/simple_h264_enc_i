@@ -68,8 +68,15 @@ typedef struct sh264e_jpeg_component_t {
     ptrdiff_t stride;
 } sh264e_jpeg_component_t;
 
+typedef enum sh264e_jpeg_alloc_mode_t {
+    SH264E_JPEG_ALLOC_HEAP = 0,
+    SH264E_JPEG_ALLOC_ARENA = 1
+} sh264e_jpeg_alloc_mode_t;
+
 typedef struct sh264e_jpeg_alloc_header_t {
     size_t size;
+    size_t arena_span;
+    unsigned from_arena;
 } sh264e_jpeg_alloc_header_t;
 
 void njInit(void);
@@ -86,6 +93,12 @@ void njDone(void);
 static size_t sh264e_jpeg_alloc_current_bytes;
 static size_t sh264e_jpeg_alloc_peak_bytes;
 static size_t sh264e_jpeg_alloc_limit = (size_t)-1;
+static size_t sh264e_jpeg_alloc_arena_offset;
+static size_t sh264e_jpeg_alloc_peak_arena_bytes;
+static unsigned sh264e_jpeg_alloc_arena_failed;
+static sh264e_jpeg_alloc_mode_t sh264e_jpeg_alloc_mode = SH264E_JPEG_ALLOC_HEAP;
+static uint8_t *sh264e_jpeg_alloc_arena;
+static size_t sh264e_jpeg_alloc_arena_capacity;
 
 static void reset_progressive_state(sh264e_encoder_t *encoder);
 
@@ -112,6 +125,9 @@ static void jpeg_allocation_stats_reset(void)
 {
     sh264e_jpeg_alloc_current_bytes = 0u;
     sh264e_jpeg_alloc_peak_bytes = 0u;
+    sh264e_jpeg_alloc_arena_offset = 0u;
+    sh264e_jpeg_alloc_peak_arena_bytes = 0u;
+    sh264e_jpeg_alloc_arena_failed = 0u;
 }
 
 void sh264e_jpeg_set_test_allocation_limit(size_t max_bytes)
@@ -119,13 +135,83 @@ void sh264e_jpeg_set_test_allocation_limit(size_t max_bytes)
     sh264e_jpeg_alloc_limit = max_bytes;
 }
 
+static size_t jpeg_alloc_alignment(void)
+{
+    return sizeof(void *);
+}
+
+static size_t jpeg_alloc_header_size(void)
+{
+    const size_t align = jpeg_alloc_alignment();
+    const size_t rem = sizeof(sh264e_jpeg_alloc_header_t) % align;
+    return rem == 0u ? sizeof(sh264e_jpeg_alloc_header_t) :
+                       sizeof(sh264e_jpeg_alloc_header_t) + align - rem;
+}
+
+static int jpeg_align_up(size_t value, size_t *out_value)
+{
+    const size_t align = jpeg_alloc_alignment();
+    const size_t rem = value % align;
+
+    if (out_value == NULL) {
+        return 0;
+    }
+    if (rem == 0u) {
+        *out_value = value;
+        return 1;
+    }
+    if (value > ((size_t)-1) - (align - rem)) {
+        return 0;
+    }
+    *out_value = value + align - rem;
+    return 1;
+}
+
+static int jpeg_allocation_span(size_t requested, size_t *out_span)
+{
+    const size_t header_size = jpeg_alloc_header_size();
+
+    if (out_span == NULL || requested == 0u || requested > ((size_t)-1) - header_size) {
+        return 0;
+    }
+    *out_span = header_size + requested;
+    return 1;
+}
+
+static void jpeg_allocation_begin_heap(void)
+{
+    sh264e_jpeg_alloc_mode = SH264E_JPEG_ALLOC_HEAP;
+    sh264e_jpeg_alloc_arena = NULL;
+    sh264e_jpeg_alloc_arena_capacity = 0u;
+    jpeg_allocation_stats_reset();
+}
+
+static void jpeg_allocation_begin_arena(uint8_t *arena, size_t arena_capacity)
+{
+    sh264e_jpeg_alloc_mode = SH264E_JPEG_ALLOC_ARENA;
+    sh264e_jpeg_alloc_arena = arena;
+    sh264e_jpeg_alloc_arena_capacity = arena_capacity;
+    jpeg_allocation_stats_reset();
+}
+
+static void jpeg_allocation_end(void)
+{
+    sh264e_jpeg_alloc_mode = SH264E_JPEG_ALLOC_HEAP;
+    sh264e_jpeg_alloc_arena = NULL;
+    sh264e_jpeg_alloc_arena_capacity = 0u;
+}
+
 void *njAllocMem(int size)
 {
     const size_t requested = (size > 0) ? (size_t)size : 0u;
+    const size_t header_size = jpeg_alloc_header_size();
+    size_t span = 0u;
+    size_t aligned_offset = 0u;
+    size_t end_offset = 0u;
     sh264e_jpeg_alloc_header_t *header;
     void *raw;
 
-    if (requested == 0u || requested > ((size_t)-1) - sizeof(*header)) {
+    if (!jpeg_allocation_span(requested, &span)) {
         return NULL;
     }
     if (sh264e_jpeg_alloc_current_bytes > ((size_t)-1) - requested) {
@@ -137,20 +223,48 @@ void *njAllocMem(int size)
             return NULL;
         }
     }
-
-    raw = malloc(sizeof(*header) + requested);
-    if (raw == NULL) {
+    if (!jpeg_align_up(sh264e_jpeg_alloc_arena_offset, &aligned_offset) ||
+        aligned_offset > ((size_t)-1) - span) {
+        sh264e_jpeg_alloc_arena_failed = 1u;
         return NULL;
     }
+    end_offset = aligned_offset + span;
 
-    header = (sh264e_jpeg_alloc_header_t *)raw;
-    header->size = requested;
+    if (sh264e_jpeg_alloc_mode == SH264E_JPEG_ALLOC_ARENA) {
+        if (sh264e_jpeg_alloc_arena == NULL || end_offset > sh264e_jpeg_alloc_arena_capacity) {
+            sh264e_jpeg_alloc_arena_failed = 1u;
+            return NULL;
+        }
+
+        header = (sh264e_jpeg_alloc_header_t *)(void *)(sh264e_jpeg_alloc_arena + aligned_offset);
+        header->size = requested;
+        header->arena_span = span;
+        header->from_arena = 1u;
+        raw = sh264e_jpeg_alloc_arena + aligned_offset + header_size;
+        sh264e_jpeg_alloc_arena_offset = end_offset;
+    } else {
+        raw = malloc(span);
+        if (raw == NULL) {
+            return NULL;
+        }
+
+        header = (sh264e_jpeg_alloc_header_t *)raw;
+        header->size = requested;
+        header->arena_span = span;
+        header->from_arena = 0u;
+        raw = (uint8_t *)raw + header_size;
+        sh264e_jpeg_alloc_arena_offset = end_offset;
+    }
+    if (sh264e_jpeg_alloc_arena_offset > sh264e_jpeg_alloc_peak_arena_bytes) {
+        sh264e_jpeg_alloc_peak_arena_bytes = sh264e_jpeg_alloc_arena_offset;
+    }
+
     sh264e_jpeg_alloc_current_bytes += requested;
     if (sh264e_jpeg_alloc_current_bytes > sh264e_jpeg_alloc_peak_bytes) {
         sh264e_jpeg_alloc_peak_bytes = sh264e_jpeg_alloc_current_bytes;
     }
 
-    return (void *)(header + 1);
+    return raw;
 }
 
 void njFreeMem(void *block)
@@ -161,13 +275,15 @@ void njFreeMem(void *block)
         return;
     }
 
-    header = ((sh264e_jpeg_alloc_header_t *)block) - 1;
+    header = (sh264e_jpeg_alloc_header_t *)(void *)((uint8_t *)block - jpeg_alloc_header_size());
     if (sh264e_jpeg_alloc_current_bytes >= header->size) {
         sh264e_jpeg_alloc_current_bytes -= header->size;
     } else {
         sh264e_jpeg_alloc_current_bytes = 0u;
     }
-    free(header);
+    if (header->from_arena == 0u) {
+        free(header);
+    }
 }
 
 void njFillMem(void *block, unsigned char byte, int size)
@@ -1309,6 +1425,9 @@ static sh264e_status_t map_jpeg_result(int result)
     case NJ_OK:
         return SH264E_OK;
     case NJ_OUT_OF_MEM:
+        if (sh264e_jpeg_alloc_arena_failed != 0u) {
+            return SH264E_ERR_BUFFER_TOO_SMALL;
+        }
         return SH264E_ERR_ALLOCATION_FAILED;
     case NJ_INTERNAL_ERR:
         return SH264E_ERR_INTERNAL;
@@ -1373,6 +1492,45 @@ static sh264e_status_t jpeg_get_components(sh264e_jpeg_component_t components[3]
 
     *out_component_count = component_count;
     return SH264E_OK;
+}
+
+static sh264e_status_t jpeg_decode_current(sh264e_jpeg_component_t components[3],
+                                           int *out_component_count)
+{
+    sh264e_status_t status;
+    uint32_t width;
+    uint32_t height;
+
+    if (njGetWidth() <= 0 || njGetHeight() <= 0) {
+        return SH264E_ERR_UNSUPPORTED_CONFIG;
+    }
+    width = (uint32_t)njGetWidth();
+    height = (uint32_t)njGetHeight();
+    if (width < SH264E_RESIZE_MIN_SRC_WIDTH ||
+        width > SH264E_RESIZE_MAX_SRC_WIDTH ||
+        height < SH264E_RESIZE_MIN_SRC_HEIGHT ||
+        height > SH264E_RESIZE_MAX_SRC_HEIGHT ||
+        (width & 1u) != 0u ||
+        (height & 1u) != 0u) {
+        return SH264E_ERR_UNSUPPORTED_CONFIG;
+    }
+
+    status = jpeg_get_components(components, out_component_count, width, height);
+    return status;
+}
+
+static sh264e_status_t jpeg_decode_memory(const uint8_t *jpeg_data,
+                                          size_t jpeg_size,
+                                          sh264e_jpeg_component_t components[3],
+                                          int *out_component_count)
+{
+    sh264e_status_t status;
+
+    status = map_jpeg_result(njDecodeComponents(jpeg_data, (int)jpeg_size));
+    if (status != SH264E_OK) {
+        return status;
+    }
+    return jpeg_decode_current(components, out_component_count);
 }
 
 sh264e_status_t sh264e_resize_get_slice_buffer_size(const sh264e_frame_t *src_frame, size_t *out_size)
@@ -1453,21 +1611,49 @@ sh264e_status_t sh264e_jpeg_get_last_allocation_stats(sh264e_jpeg_allocation_sta
     return SH264E_OK;
 }
 
-sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
-                                       const uint8_t *jpeg_data,
-                                       size_t jpeg_size,
-                                       uint8_t *work_buffer,
-                                       size_t work_buffer_capacity,
-                                       uint8_t *out,
-                                       size_t out_capacity,
-                                       size_t *out_size)
+sh264e_status_t sh264e_jpeg_get_work_size(const uint8_t *jpeg_data,
+                                          size_t jpeg_size,
+                                          size_t *out_size)
+{
+    sh264e_status_t status;
+    int component_count = 0;
+    sh264e_jpeg_component_t components[3];
+
+    if (jpeg_data == NULL || out_size == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    *out_size = 0u;
+    if (jpeg_size == 0u || jpeg_size > (size_t)INT_MAX) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+
+    jpeg_allocation_begin_heap();
+    njInit();
+    status = jpeg_decode_memory(jpeg_data, jpeg_size, components, &component_count);
+    njDone();
+    if (status == SH264E_OK) {
+        *out_size = sh264e_jpeg_alloc_peak_arena_bytes;
+    }
+    jpeg_allocation_end();
+    return status;
+}
+
+static sh264e_status_t sh264e_encode_jpeg_idr_impl(sh264e_encoder_t *encoder,
+                                                   const uint8_t *jpeg_data,
+                                                   size_t jpeg_size,
+                                                   uint8_t *jpeg_arena,
+                                                   size_t jpeg_arena_size,
+                                                   int use_arena,
+                                                   uint8_t *work_buffer,
+                                                   size_t work_buffer_capacity,
+                                                   uint8_t *out,
+                                                   size_t out_capacity,
+                                                   size_t *out_size)
 {
     sh264e_status_t status;
     size_t required_work = 0;
     size_t offset = 0;
     size_t bytes = 0;
-    uint32_t width;
-    uint32_t height;
     int component_count = 0;
     sh264e_jpeg_component_t components[3];
     unsigned slice_index;
@@ -1483,6 +1669,9 @@ sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
     if (jpeg_size == 0u || jpeg_size > (size_t)INT_MAX) {
         return SH264E_ERR_INVALID_ARGUMENT;
     }
+    if (use_arena != 0 && (jpeg_arena == NULL || jpeg_arena_size == 0u)) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
     status = sh264e_jpeg_get_slice_buffer_size(&required_work);
     if (status != SH264E_OK) {
         return status;
@@ -1491,32 +1680,16 @@ sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
         return SH264E_ERR_BUFFER_TOO_SMALL;
     }
 
-    jpeg_allocation_stats_reset();
+    if (use_arena != 0) {
+        jpeg_allocation_begin_arena(jpeg_arena, jpeg_arena_size);
+    } else {
+        jpeg_allocation_begin_heap();
+    }
     njInit();
-    status = map_jpeg_result(njDecodeComponents(jpeg_data, (int)jpeg_size));
+    status = jpeg_decode_memory(jpeg_data, jpeg_size, components, &component_count);
     if (status != SH264E_OK) {
         njDone();
-        return status;
-    }
-    if (njGetWidth() <= 0 || njGetHeight() <= 0) {
-        njDone();
-        return SH264E_ERR_UNSUPPORTED_CONFIG;
-    }
-    width = (uint32_t)njGetWidth();
-    height = (uint32_t)njGetHeight();
-    if (width < SH264E_RESIZE_MIN_SRC_WIDTH ||
-        width > SH264E_RESIZE_MAX_SRC_WIDTH ||
-        height < SH264E_RESIZE_MIN_SRC_HEIGHT ||
-        height > SH264E_RESIZE_MAX_SRC_HEIGHT ||
-        (width & 1u) != 0u ||
-        (height & 1u) != 0u) {
-        njDone();
-        return SH264E_ERR_UNSUPPORTED_CONFIG;
-    }
-
-    status = jpeg_get_components(components, &component_count, width, height);
-    if (status != SH264E_OK) {
-        njDone();
+        jpeg_allocation_end();
         return status;
     }
 
@@ -1524,6 +1697,7 @@ sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
     if (status != SH264E_OK) {
         reset_progressive_state(encoder);
         njDone();
+        jpeg_allocation_end();
         return status;
     }
     offset += bytes;
@@ -1541,6 +1715,7 @@ sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
         if (status != SH264E_OK) {
             reset_progressive_state(encoder);
             njDone();
+            jpeg_allocation_end();
             return status;
         }
         offset += bytes;
@@ -1550,12 +1725,45 @@ sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
     if (status != SH264E_OK) {
         reset_progressive_state(encoder);
         njDone();
+        jpeg_allocation_end();
         return status;
     }
 
     njDone();
+    jpeg_allocation_end();
     *out_size = offset;
     return SH264E_OK;
+}
+
+sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
+                                       const uint8_t *jpeg_data,
+                                       size_t jpeg_size,
+                                       uint8_t *work_buffer,
+                                       size_t work_buffer_capacity,
+                                       uint8_t *out,
+                                       size_t out_capacity,
+                                       size_t *out_size)
+{
+    return sh264e_encode_jpeg_idr_impl(encoder, jpeg_data, jpeg_size, NULL, 0u, 0,
+                                       work_buffer, work_buffer_capacity,
+                                       out, out_capacity, out_size);
+}
+
+sh264e_status_t sh264e_encode_jpeg_idr_with_arena(sh264e_encoder_t *encoder,
+                                                  const uint8_t *jpeg_data,
+                                                  size_t jpeg_size,
+                                                  uint8_t *jpeg_arena,
+                                                  size_t jpeg_arena_size,
+                                                  uint8_t *work_buffer,
+                                                  size_t work_buffer_capacity,
+                                                  uint8_t *out,
+                                                  size_t out_capacity,
+                                                  size_t *out_size)
+{
+    return sh264e_encode_jpeg_idr_impl(encoder, jpeg_data, jpeg_size,
+                                       jpeg_arena, jpeg_arena_size, 1,
+                                       work_buffer, work_buffer_capacity,
+                                       out, out_capacity, out_size);
 }
 
 sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,

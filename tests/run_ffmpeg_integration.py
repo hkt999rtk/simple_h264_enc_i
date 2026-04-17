@@ -164,6 +164,8 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream):
     result = run_capture([args.jpeg_encoder, "--format", fmt, str(jpeg_input), str(bitstream)])
     if "jpeg current allocation bytes: 0" not in result.stdout:
         raise RuntimeError(f"JPEG encoder did not release tracked allocations: {result.stdout!r}")
+    if "jpeg work arena bytes:" not in result.stdout:
+        raise RuntimeError(f"JPEG encoder did not report work arena size: {result.stdout!r}")
     for line in result.stdout.splitlines():
         if line.startswith("jpeg peak allocation bytes:"):
             if int(line.rsplit(" ", 1)[1]) == 0:
@@ -257,13 +259,13 @@ def main():
         if pix_fmt == "yuvj420p":
             run_expect_fail([
                 args.jpeg_encoder,
-                "--test-allocation-limit",
+                "--test-arena-shrink",
                 "1",
                 "--format",
                 "i420",
                 str(jpeg_input),
-                str(workdir / "output_jpeg_alloc_fail.h264"),
-            ], stderr_contains="allocation failed")
+                str(workdir / "output_jpeg_arena_too_small.h264"),
+            ], stderr_contains="buffer too small")
         for fmt in ("i420", "nv12"):
             jpeg_output = workdir / f"output_jpeg_{pix_fmt}_{fmt}.h264"
             encode_jpeg(args, fmt, jpeg_input, jpeg_output)

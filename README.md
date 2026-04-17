@@ -122,7 +122,7 @@ Encode a baseline JPEG memory-input path through the library wrapper:
 ```
 
 The JPEG path uses NanoJPEG inside the core library. The tool only reads the JPEG file; the library API accepts a caller-provided JPEG byte buffer and emits H.264 into a caller-provided output buffer.
-The tool prints current and peak NanoJPEG allocation bytes reported by `sh264e_jpeg_get_last_allocation_stats`; these bytes cover decoded JPEG component planes and exclude caller-owned input, slice-work, and H.264 output buffers.
+The tool sizes a caller-provided JPEG decoder arena with `sh264e_jpeg_get_work_size`, passes that arena to `sh264e_encode_jpeg_idr_with_arena`, and prints the arena requirement plus current and peak NanoJPEG allocation bytes reported by `sh264e_jpeg_get_last_allocation_stats`. The allocation stats cover decoded JPEG component planes and exclude caller-owned input, arena overhead, slice-work, and H.264 output buffers.
 
 For Cortex-M validation, CMake builds QEMU smoke firmware for M3/M4/M7 when the ARM bare-metal toolchain and QEMU are available. CMake first probes whether `arm-none-eabi-gcc` can compile the library's standard-header usage; if the toolchain is only partially installed, QEMU firmware tests are skipped instead of breaking the host build.
 
@@ -176,8 +176,10 @@ Resize entry points:
 JPEG pipeline entry points:
 
 * `sh264e_jpeg_get_slice_buffer_size`
+* `sh264e_jpeg_get_work_size`
 * `sh264e_jpeg_get_last_allocation_stats`
 * `sh264e_encode_jpeg_idr`
+* `sh264e_encode_jpeg_idr_with_arena`
 
 Frame-mode convenience entry points:
 

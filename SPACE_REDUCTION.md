@@ -198,7 +198,11 @@ sh264e_status_t sh264e_encode_jpeg_idr_with_arena(sh264e_encoder_t *encoder,
                                                   size_t *out_size);
 ```
 
-This should be introduced only after Phase 3 gives accurate sizing.
+Implemented API:
+
+* `sh264e_jpeg_get_work_size` decodes with the existing heap-backed path and returns the exact caller arena size needed by the deterministic arena path, including allocator headers/alignment.
+* `sh264e_encode_jpeg_idr_with_arena` decodes through the caller-provided arena and returns `SH264E_ERR_BUFFER_TOO_SMALL` when the arena cannot satisfy NanoJPEG component-plane allocation.
+* `sh264e_encode_jpeg_idr` remains the heap-backed convenience wrapper for callers that do not need deterministic JPEG decoder memory placement.
 
 ### Expected Benefit
 
@@ -210,7 +214,7 @@ This should be introduced only after Phase 3 gives accurate sizing.
 
 * Test exact-size arena succeeds.
 * Test one-byte-too-small arena fails.
-* QEMU smoke test covers arena path.
+* QEMU smoke test covers arena path when the ARM/QEMU toolchain is available.
 
 ## Phase 5: MCU-Row Streaming Decode
 

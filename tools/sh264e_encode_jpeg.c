@@ -8,7 +8,9 @@ void sh264e_jpeg_set_test_allocation_limit(size_t max_bytes);
 
 static void usage(const char *argv0)
 {
-    fprintf(stderr, "usage: %s [--test-allocation-limit BYTES] --format i420|nv12 input.jpg output.h264\n",
+    fprintf(stderr,
+            "usage: %s [--test-allocation-limit BYTES] [--test-arena-shrink BYTES] "
+            "--format i420|nv12 input.jpg output.h264\n",
             argv0);
 }
 
@@ -98,23 +100,37 @@ int main(int argc, char **argv)
     sh264e_encoder_t *encoder = NULL;
     sh264e_status_t status;
     uint8_t *jpeg_data = NULL;
+    uint8_t *jpeg_arena = NULL;
     uint8_t *work = NULL;
     uint8_t *output_buf = NULL;
     FILE *output = NULL;
     size_t jpeg_size = 0;
+    size_t jpeg_work_size = 0;
+    size_t jpeg_arena_size = 0;
     size_t work_size = 0;
     size_t output_capacity = 0;
     size_t output_size = 0;
     size_t allocation_limit = (size_t)-1;
+    size_t arena_shrink = 0;
     int argi = 1;
     int rc = 1;
 
-    if (argc >= 4 && strcmp(argv[argi], "--test-allocation-limit") == 0) {
-        if (!parse_size(argv[argi + 1], &allocation_limit)) {
-            usage(argv[0]);
-            return 2;
+    while (argi + 1 < argc) {
+        if (strcmp(argv[argi], "--test-allocation-limit") == 0) {
+            if (!parse_size(argv[argi + 1], &allocation_limit)) {
+                usage(argv[0]);
+                return 2;
+            }
+            argi += 2;
+        } else if (strcmp(argv[argi], "--test-arena-shrink") == 0) {
+            if (!parse_size(argv[argi + 1], &arena_shrink)) {
+                usage(argv[0]);
+                return 2;
+            }
+            argi += 2;
+        } else {
+            break;
         }
-        argi += 2;
     }
 
     if (argc - argi != 4 || strcmp(argv[argi], "--format") != 0 ||
@@ -127,6 +143,22 @@ int main(int argc, char **argv)
 
     if (!read_file(input_path, &jpeg_data, &jpeg_size)) {
         fprintf(stderr, "failed to read JPEG input: %s\n", input_path);
+        goto done;
+    }
+    if (allocation_limit == (size_t)-1) {
+        status = sh264e_jpeg_get_work_size(jpeg_data, jpeg_size, &jpeg_work_size);
+        if (status != SH264E_OK) {
+            fprintf(stderr, "sh264e_jpeg_get_work_size failed: %s\n", sh264e_status_string(status));
+            goto done;
+        }
+        jpeg_arena_size = jpeg_work_size;
+        if (arena_shrink > jpeg_arena_size) {
+            jpeg_arena_size = 0u;
+        } else {
+            jpeg_arena_size -= arena_shrink;
+        }
+    } else if (arena_shrink != 0u) {
+        fprintf(stderr, "--test-arena-shrink cannot be combined with --test-allocation-limit\n");
         goto done;
     }
 
@@ -147,6 +179,13 @@ int main(int argc, char **argv)
         goto done;
     }
 
+    if (allocation_limit == (size_t)-1) {
+        jpeg_arena = (uint8_t *)malloc(jpeg_arena_size);
+        if (jpeg_arena == NULL) {
+            fprintf(stderr, "failed to allocate JPEG arena\n");
+            goto done;
+        }
+    }
     work = (uint8_t *)malloc(work_size);
     output_buf = (uint8_t *)malloc(output_capacity);
     if (work == NULL || output_buf == NULL) {
@@ -162,12 +201,17 @@ int main(int argc, char **argv)
 
     if (allocation_limit != (size_t)-1) {
         sh264e_jpeg_set_test_allocation_limit(allocation_limit);
+        status = sh264e_encode_jpeg_idr(encoder, jpeg_data, jpeg_size,
+                                        work, work_size,
+                                        output_buf, output_capacity, &output_size);
+    } else {
+        status = sh264e_encode_jpeg_idr_with_arena(encoder, jpeg_data, jpeg_size,
+                                                   jpeg_arena, jpeg_arena_size,
+                                                   work, work_size,
+                                                   output_buf, output_capacity, &output_size);
     }
-    status = sh264e_encode_jpeg_idr(encoder, jpeg_data, jpeg_size,
-                                    work, work_size,
-                                    output_buf, output_capacity, &output_size);
     if (status != SH264E_OK) {
-        fprintf(stderr, "sh264e_encode_jpeg_idr failed: %s\n", sh264e_status_string(status));
+        fprintf(stderr, "JPEG encode failed: %s\n", sh264e_status_string(status));
         goto done;
     }
 
@@ -189,6 +233,7 @@ int main(int argc, char **argv)
                     sh264e_status_string(status));
             goto done;
         }
+        printf("jpeg work arena bytes: %zu\n", jpeg_work_size);
         printf("jpeg current allocation bytes: %zu\n", stats.current_bytes);
         printf("jpeg peak allocation bytes: %zu\n", stats.peak_bytes);
     }
@@ -202,6 +247,7 @@ done:
     sh264e_encoder_destroy(encoder);
     free(output_buf);
     free(work);
+    free(jpeg_arena);
     free(jpeg_data);
     return rc;
 }
