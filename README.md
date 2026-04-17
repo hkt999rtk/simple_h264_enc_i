@@ -77,8 +77,8 @@ The test suite covers:
 * SPS/PPS/IDR Annex B NALU sequence
 * library boundary check for forbidden file I/O calls
 * ffmpeg/ffprobe integration when those tools are available
-* Cortex-M QEMU scaler smoke test when `arm-none-eabi-gcc` and `qemu-system-arm` are available
-* Cortex-M QEMU scaler benchmark firmware correctness when those tools are available
+* Cortex-M QEMU scaler smoke tests when `arm-none-eabi-gcc` and `qemu-system-arm` are available and usable
+* Cortex-M QEMU scaler benchmark firmware correctness for default DSP-capable and portable C variants when those tools are available and usable
 
 ## CLI Example
 
@@ -123,7 +123,18 @@ Encode a baseline JPEG memory-input path through the library wrapper:
 
 The JPEG path uses NanoJPEG inside the core library. The tool only reads the JPEG file; the library API accepts a caller-provided JPEG byte buffer and emits H.264 into a caller-provided output buffer.
 
-For Cortex-M validation, CMake builds QEMU smoke firmware for M3/M4/M7 when the ARM bare-metal toolchain is available. The M4 benchmark firmware records DWT cycle counts in `sh264e_bench_cycles` for real-board measurement.
+For Cortex-M validation, CMake builds QEMU smoke firmware for M3/M4/M7 when the ARM bare-metal toolchain and QEMU are available. CMake first probes whether `arm-none-eabi-gcc` can compile the library's standard-header usage; if the toolchain is only partially installed, QEMU firmware tests are skipped instead of breaking the host build.
+
+The QEMU benchmark preflight targets are:
+
+| Target | CPU / machine | Variant | Purpose |
+| --- | --- | --- | --- |
+| `sh264e_qemu_scaler_bench_m4` | `cortex-m4` / `mps2-an386` | default DSP-capable build | firmware boot, semihosting exit, checksum, cycle counter plumbing |
+| `sh264e_qemu_scaler_bench_m4_portable` | `cortex-m4` / `mps2-an386` | `SH264E_DISABLE_ARM_DSP` | portable C comparison preflight |
+| `sh264e_qemu_scaler_bench_m7` | `cortex-m7` / `mps2-an500` | default DSP-capable build | M7 benchmark preflight |
+| `sh264e_qemu_scaler_bench_m7_portable` | `cortex-m7` / `mps2-an500` | `SH264E_DISABLE_ARM_DSP` | M7 portable C comparison preflight |
+
+QEMU validates firmware build/run behavior and stable nonzero `sh264e_bench_checksum`. Treat `sh264e_bench_cycles` from QEMU as a preflight signal only; final tuning-quality cycle counts still need real Cortex-M hardware with documented CPU, clock, compiler flags, cache state, and memory placement.
 
 Validate with ffmpeg:
 
