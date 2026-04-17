@@ -99,31 +99,22 @@ typedef sh264e_status_t (*sh264e_jpeg_row_ready_fn)(
 
 The first production API does not need to expose this callback publicly. The
 current prototype keeps it internal and exercises it through
-`sh264e_encode_jpeg --streaming-prototype` for 1280x720 4:2:0, 4:2:2, and
-4:4:4 YCbCr inputs to I420 output. A public streaming API should wait until
-the prototype proves the row-cache contract across the rest of the supported
-JPEG matrix.
+`sh264e_encode_jpeg --streaming-prototype`. The prototype now covers the
+supported JPEG source-size policy for grayscale and YCbCr inputs, I420 and NV12
+output, and caller-provided arena allocation for the retained row cache.
 
 ## Promotion Decision
 
-The row-window bridge should remain a hidden prototype for issue #5 instead of
-becoming the production default in this PR. The prototype proves the MCU-row
-decode and scaler handoff for the 1280x720 color matrix, including restart
-markers, but it still has production-boundary gaps:
+The row-window bridge should remain hidden and opt-in instead of becoming the
+production default in this issue. The prototype now closes the main
+production-matrix gaps: dynamic cache sizing, caller-provided arena allocation,
+I420 and NV12 output, grayscale coverage, color subsampling coverage, and
+restart-marker coverage.
 
-* The only exposed entry point is the tool-local `--streaming-prototype` path.
-* The prototype output is I420-only and does not cover the public NV12 JPEG
-  output path.
-* The source-size policy is fixed at 1280x720 rather than the existing public
-  JPEG range.
-* Row-cache allocation still uses `malloc` and is not integrated with the
-  caller-provided JPEG arena sizing API.
-* Grayscale handling is intentionally left on the component-plane fallback.
-
-Promotion should happen in a follow-up after the internal row-window contract
-can compute cache size from arbitrary supported dimensions, share the
-caller-provided arena policy, and pass the full public JPEG output matrix. Until
-then, the component-plane arena path remains the production/default JPEG path.
+The default JPEG path still remains the component-plane arena path because it is
+the public API contract today. Streaming should become default only after the
+project decides how to expose the row-window policy outside the tool-local
+`--streaming-prototype` flag.
 
 ## Memory Estimate
 
@@ -145,32 +136,34 @@ height. Approximate component-cache sizes are:
 | 1280x720 4:2:0 | 30,720 | 2 MCU rows | 61,440 |
 | 1280x720 4:2:2 | 40,960 | 2 MCU rows | 81,920 |
 | 1280x720 4:4:4 | 61,440 | 2 MCU rows | 122,880 |
-| 5120x2880 4:2:0 | 122,880 | 3 MCU rows | 368,640 |
-| 5120x2880 4:4:4 | 122,880 | 5 MCU rows | 614,400 |
+| 2560x1440 4:2:0 | 61,440 | dynamic + margin | 184,320 |
+| 5120x2880 4:2:0 | 122,880 | dynamic + margin | 491,520 |
+| 5120x2880 4:4:4 | 122,880 | dynamic + margin | 819,200 |
 
 The exact retained-row count should be computed from the scaler's fixed-point
-source mapping, then rounded up to the JPEG component MCU-row height. These
-figures exclude the existing 61,440-byte encoder slice work buffer and H.264
-output buffer, both of which are already caller-controlled.
+source mapping, rounded up to the JPEG component MCU-row height, and extended by
+one MCU-row margin so slices at row-window boundaries can still sample the
+previous row. These figures exclude the existing 61,440-byte encoder slice work
+buffer and H.264 output buffer, both of which are already caller-controlled.
 
 ## Validation Plan
 
 The prototype adds a tool/test-only path before replacing the default JPEG
 encoder:
 
-* Generate `1280x720` `yuvj420p`, `yuvj422p`, and `yuvj444p` JPEG fixtures
-  with ffmpeg.
-* Encode through the streaming prototype to Annex B H.264.
+* Generate `1280x720` `yuvj420p`, `yuvj422p`, and `yuvj444p` JPEG fixtures,
+  a `2560x1440` `yuvj420p` JPEG fixture, and a grayscale JPEG fixture with
+  ffmpeg.
+* Encode through the streaming prototype to Annex B H.264 for I420 and NV12
+  output where applicable.
 * Decode the H.264 with ffmpeg and verify the same stream metadata as the
   component-plane path.
 * Decode both the streaming and component-plane H.264 outputs to raw `yuv420p`
-  and compare SHA-256 hashes for each I420 fixture.
+  and compare SHA-256 hashes for each covered fixture.
 * Confirm the NanoJPEG allocation peak is below the 1,382,400-byte full
   component-plane allocation for the 4:2:0 fixture and below the corresponding
   full component-plane allocation for 4:2:2 and 4:4:4.
 * When `cjpeg` is available, generate a 4:2:0 fixture with DRI/RST restart
   markers and run the same streaming-vs-component decoded-frame comparison.
-* Keep the component-plane arena path as the production fallback; the issue #5
-  decision is to leave the row-window bridge hidden until a follow-up promotes
-  it with arena sizing, dynamic source dimensions, NV12 output, and grayscale
-  coverage.
+* Keep the component-plane arena path as the production/default path while the
+  row-window bridge remains hidden behind the streaming prototype flag.

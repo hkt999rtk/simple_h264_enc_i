@@ -123,7 +123,7 @@ Encode a baseline JPEG memory-input path through the library wrapper:
 
 The JPEG path uses NanoJPEG inside the core library. The tool only reads the JPEG file; the library API accepts a caller-provided JPEG byte buffer and emits H.264 into a caller-provided output buffer.
 The tool sizes a caller-provided JPEG decoder arena with `sh264e_jpeg_get_work_size`, passes that arena to `sh264e_encode_jpeg_idr_with_arena`, and prints the arena requirement plus current and peak NanoJPEG allocation bytes reported by `sh264e_jpeg_get_last_allocation_stats`. The allocation stats cover decoded JPEG component planes and exclude caller-owned input, arena overhead, slice-work, and H.264 output buffers.
-The hidden `--streaming-prototype` flag exercises the experimental MCU-row streaming path for 1280x720 4:2:0, 4:2:2, and 4:4:4 JPEG inputs to I420 output without making it the default encoder path.
+The hidden `--streaming-prototype` flag exercises the experimental MCU-row streaming path across the supported JPEG source-size range for grayscale and YCbCr inputs, with I420 and NV12 output. The tool sizes and passes a caller-provided streaming arena for both NanoJPEG's one-MCU-row decode buffers and the retained row cache. This path remains opt-in; the component-plane arena path is still the production/default JPEG encoder path.
 
 For Cortex-M validation, CMake builds QEMU smoke firmware for M3/M4/M7 when the ARM bare-metal toolchain and QEMU are available. CMake first probes whether `arm-none-eabi-gcc` can compile the library's standard-header usage; if the toolchain is only partially installed, QEMU firmware tests are skipped instead of breaking the host build.
 
