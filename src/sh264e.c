@@ -1,0 +1,827 @@
+#include "sh264e.h"
+
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define SH264E_MB_SIZE 16u
+#define SH264E_LUMA_4X4 4u
+#define SH264E_MBS_X (SH264E_V1_WIDTH / SH264E_MB_SIZE)
+#define SH264E_MBS_Y (SH264E_V1_HEIGHT / SH264E_MB_SIZE)
+#define SH264E_LUMA4_X (SH264E_V1_WIDTH / SH264E_LUMA_4X4)
+#define SH264E_LUMA4_Y (SH264E_V1_HEIGHT / SH264E_LUMA_4X4)
+#define SH264E_CHROMA_WIDTH (SH264E_V1_WIDTH / 2u)
+#define SH264E_CHROMA_HEIGHT (SH264E_V1_HEIGHT / 2u)
+#define SH264E_MAX_QP 51
+
+typedef struct sh264e_bit_writer_t {
+    uint8_t *data;
+    size_t capacity;
+    size_t byte_pos;
+    unsigned bit_pos;
+    int error;
+} sh264e_bit_writer_t;
+
+struct sh264e_encoder_t {
+    sh264e_config_t config;
+    uint8_t *rbsp;
+    size_t rbsp_capacity;
+    uint8_t *recon_y;
+    uint8_t *recon_u;
+    uint8_t *recon_v;
+    uint8_t *nz_luma;
+};
+
+static const uint8_t k_luma4x4_x[16] = {
+    0, 4, 0, 4, 8, 12, 8, 12, 0, 4, 0, 4, 8, 12, 8, 12
+};
+
+static const uint8_t k_luma4x4_y[16] = {
+    0, 0, 4, 4, 0, 0, 4, 4, 8, 8, 12, 12, 8, 8, 12, 12
+};
+
+static const uint8_t k_cbp_intra_code_num[48] = {
+    3, 29, 30, 17, 31, 18, 37, 8,
+    32, 38, 19, 9, 20, 10, 11, 2,
+    16, 33, 34, 21, 35, 22, 39, 4,
+    36, 40, 23, 5, 24, 6, 7, 1,
+    41, 42, 43, 25, 44, 26, 46, 12,
+    45, 47, 27, 13, 28, 14, 15, 0
+};
+
+static const int k_dequant_dc_scale[6] = {10, 11, 13, 14, 16, 18};
+
+static sh264e_status_t validate_config(const sh264e_config_t *config)
+{
+    if (config == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    if (config->width != SH264E_V1_WIDTH || config->height != SH264E_V1_HEIGHT) {
+        return SH264E_ERR_UNSUPPORTED_CONFIG;
+    }
+    if (config->pixfmt != SH264E_PIXFMT_I420 && config->pixfmt != SH264E_PIXFMT_NV12) {
+        return SH264E_ERR_UNSUPPORTED_CONFIG;
+    }
+    if (config->qp < 0 || config->qp > SH264E_MAX_QP) {
+        return SH264E_ERR_UNSUPPORTED_CONFIG;
+    }
+    return SH264E_OK;
+}
+
+static sh264e_status_t validate_frame(const sh264e_config_t *config, const sh264e_frame_t *frame)
+{
+    if (config == NULL || frame == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    if (frame->width != config->width || frame->height != config->height ||
+        frame->pixfmt != config->pixfmt) {
+        return SH264E_ERR_UNSUPPORTED_CONFIG;
+    }
+    if (frame->plane[0] == NULL || frame->stride[0] < (ptrdiff_t)config->width) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    if (frame->pixfmt == SH264E_PIXFMT_I420) {
+        if (frame->plane[1] == NULL || frame->plane[2] == NULL ||
+            frame->stride[1] < (ptrdiff_t)(config->width / 2u) ||
+            frame->stride[2] < (ptrdiff_t)(config->width / 2u)) {
+            return SH264E_ERR_INVALID_ARGUMENT;
+        }
+    } else {
+        if (frame->plane[1] == NULL ||
+            frame->stride[1] < (ptrdiff_t)config->width) {
+            return SH264E_ERR_INVALID_ARGUMENT;
+        }
+    }
+    return SH264E_OK;
+}
+
+static void bw_init(sh264e_bit_writer_t *bw, uint8_t *data, size_t capacity)
+{
+    bw->data = data;
+    bw->capacity = capacity;
+    bw->byte_pos = 0;
+    bw->bit_pos = 0;
+    bw->error = 0;
+}
+
+static size_t bw_size(const sh264e_bit_writer_t *bw)
+{
+    return bw->byte_pos + (bw->bit_pos != 0u ? 1u : 0u);
+}
+
+static void bw_write_bit(sh264e_bit_writer_t *bw, unsigned bit)
+{
+    if (bw->error != 0) {
+        return;
+    }
+    if (bw->byte_pos >= bw->capacity) {
+        bw->error = 1;
+        return;
+    }
+    if (bw->bit_pos == 0u) {
+        bw->data[bw->byte_pos] = 0;
+    }
+    if ((bit & 1u) != 0u) {
+        bw->data[bw->byte_pos] |= (uint8_t)(1u << (7u - bw->bit_pos));
+    }
+    bw->bit_pos++;
+    if (bw->bit_pos == 8u) {
+        bw->bit_pos = 0;
+        bw->byte_pos++;
+    }
+}
+
+static void bw_write_bits(sh264e_bit_writer_t *bw, uint32_t bits, unsigned count)
+{
+    unsigned i;
+    for (i = 0; i < count; i++) {
+        const unsigned shift = count - 1u - i;
+        bw_write_bit(bw, (bits >> shift) & 1u);
+    }
+}
+
+static void bw_write_ue(sh264e_bit_writer_t *bw, uint32_t value)
+{
+    uint32_t code_num = value + 1u;
+    unsigned leading_zero_bits = 0;
+    uint32_t tmp = code_num;
+    while (tmp > 1u) {
+        tmp >>= 1u;
+        leading_zero_bits++;
+    }
+    while (leading_zero_bits > 0u) {
+        bw_write_bit(bw, 0);
+        leading_zero_bits--;
+    }
+    tmp = code_num;
+    leading_zero_bits = 0;
+    while (tmp > 1u) {
+        tmp >>= 1u;
+        leading_zero_bits++;
+    }
+    bw_write_bits(bw, code_num, leading_zero_bits + 1u);
+}
+
+static void bw_write_se(sh264e_bit_writer_t *bw, int32_t value)
+{
+    uint32_t code_num;
+    if (value <= 0) {
+        code_num = (uint32_t)(-value) * 2u;
+    } else {
+        code_num = ((uint32_t)value * 2u) - 1u;
+    }
+    bw_write_ue(bw, code_num);
+}
+
+static void bw_rbsp_trailing_bits(sh264e_bit_writer_t *bw)
+{
+    bw_write_bit(bw, 1);
+    while (bw->bit_pos != 0u) {
+        bw_write_bit(bw, 0);
+    }
+}
+
+static int append_byte(uint8_t *out, size_t capacity, size_t *offset, uint8_t value)
+{
+    if (*offset >= capacity) {
+        return 0;
+    }
+    out[*offset] = value;
+    *offset += 1u;
+    return 1;
+}
+
+static sh264e_status_t append_annexb_nalu(uint8_t *out,
+                                          size_t capacity,
+                                          size_t *offset,
+                                          uint8_t nal_header,
+                                          const uint8_t *rbsp,
+                                          size_t rbsp_size)
+{
+    size_t i;
+    unsigned zero_count = 0;
+
+    if (!append_byte(out, capacity, offset, 0x00u) ||
+        !append_byte(out, capacity, offset, 0x00u) ||
+        !append_byte(out, capacity, offset, 0x01u) ||
+        !append_byte(out, capacity, offset, nal_header)) {
+        return SH264E_ERR_BUFFER_TOO_SMALL;
+    }
+
+    for (i = 0; i < rbsp_size; i++) {
+        const uint8_t b = rbsp[i];
+        if (zero_count >= 2u && b <= 0x03u) {
+            if (!append_byte(out, capacity, offset, 0x03u)) {
+                return SH264E_ERR_BUFFER_TOO_SMALL;
+            }
+            zero_count = 0;
+        }
+        if (!append_byte(out, capacity, offset, b)) {
+            return SH264E_ERR_BUFFER_TOO_SMALL;
+        }
+        if (b == 0x00u) {
+            zero_count++;
+        } else {
+            zero_count = 0;
+        }
+    }
+
+    return SH264E_OK;
+}
+
+static sh264e_status_t make_sps(sh264e_encoder_t *encoder,
+                                uint8_t *out,
+                                size_t capacity,
+                                size_t *offset)
+{
+    sh264e_bit_writer_t bw;
+    bw_init(&bw, encoder->rbsp, encoder->rbsp_capacity);
+
+    bw_write_bits(&bw, 66u, 8);      /* profile_idc: Baseline */
+    bw_write_bits(&bw, 0x40u, 8);    /* constraint_set0_flag */
+    bw_write_bits(&bw, 50u, 8);      /* level_idc: 5.0 */
+    bw_write_ue(&bw, 0);             /* seq_parameter_set_id */
+    bw_write_ue(&bw, 0);             /* log2_max_frame_num_minus4 */
+    bw_write_ue(&bw, 0);             /* pic_order_cnt_type */
+    bw_write_ue(&bw, 0);             /* log2_max_pic_order_cnt_lsb_minus4 */
+    bw_write_ue(&bw, 1);             /* max_num_ref_frames */
+    bw_write_bit(&bw, 0);            /* gaps_in_frame_num_value_allowed_flag */
+    bw_write_ue(&bw, SH264E_MBS_X - 1u);
+    bw_write_ue(&bw, SH264E_MBS_Y - 1u);
+    bw_write_bit(&bw, 1);            /* frame_mbs_only_flag */
+    bw_write_bit(&bw, 1);            /* direct_8x8_inference_flag */
+    bw_write_bit(&bw, 0);            /* frame_cropping_flag */
+    bw_write_bit(&bw, 0);            /* vui_parameters_present_flag */
+    bw_rbsp_trailing_bits(&bw);
+
+    if (bw.error != 0) {
+        return SH264E_ERR_INTERNAL;
+    }
+    return append_annexb_nalu(out, capacity, offset, 0x67u, encoder->rbsp, bw_size(&bw));
+}
+
+static sh264e_status_t make_pps(sh264e_encoder_t *encoder,
+                                uint8_t *out,
+                                size_t capacity,
+                                size_t *offset)
+{
+    sh264e_bit_writer_t bw;
+    bw_init(&bw, encoder->rbsp, encoder->rbsp_capacity);
+
+    bw_write_ue(&bw, 0);                         /* pic_parameter_set_id */
+    bw_write_ue(&bw, 0);                         /* seq_parameter_set_id */
+    bw_write_bit(&bw, 0);                        /* entropy_coding_mode_flag: CAVLC */
+    bw_write_bit(&bw, 0);                        /* bottom_field_pic_order_in_frame_present_flag */
+    bw_write_ue(&bw, 0);                         /* num_slice_groups_minus1 */
+    bw_write_ue(&bw, 0);                         /* num_ref_idx_l0_default_active_minus1 */
+    bw_write_ue(&bw, 0);                         /* num_ref_idx_l1_default_active_minus1 */
+    bw_write_bit(&bw, 0);                        /* weighted_pred_flag */
+    bw_write_bits(&bw, 0, 2);                    /* weighted_bipred_idc */
+    bw_write_se(&bw, encoder->config.qp - 26);   /* pic_init_qp_minus26 */
+    bw_write_se(&bw, 0);                         /* pic_init_qs_minus26 */
+    bw_write_se(&bw, 0);                         /* chroma_qp_index_offset */
+    bw_write_bit(&bw, 1);                        /* deblocking_filter_control_present_flag */
+    bw_write_bit(&bw, 0);                        /* constrained_intra_pred_flag */
+    bw_write_bit(&bw, 0);                        /* redundant_pic_cnt_present_flag */
+    bw_rbsp_trailing_bits(&bw);
+
+    if (bw.error != 0) {
+        return SH264E_ERR_INTERNAL;
+    }
+    return append_annexb_nalu(out, capacity, offset, 0x68u, encoder->rbsp, bw_size(&bw));
+}
+
+static int clip_u8(int value)
+{
+    if (value < 0) {
+        return 0;
+    }
+    if (value > 255) {
+        return 255;
+    }
+    return value;
+}
+
+static int dequant_effective_scale(int qp)
+{
+    const int rem = qp % 6;
+    const int qbits = qp / 6;
+    const int scale = k_dequant_dc_scale[rem];
+
+    if (qbits >= 4) {
+        return scale << (qbits - 4);
+    }
+    return (scale + (1 << (3 - qbits))) >> (4 - qbits);
+}
+
+static int inverse_dc_residual(int level, int qp)
+{
+    const int rem = qp % 6;
+    const int qbits = qp / 6;
+    const int scale = k_dequant_dc_scale[rem];
+    int transformed;
+
+    if (level == 0) {
+        return 0;
+    }
+    if (qbits >= 4) {
+        transformed = level * scale * (1 << (qbits - 4));
+    } else {
+        transformed = (level * scale + (1 << (3 - qbits))) >> (4 - qbits);
+    }
+    return (transformed + 32) >> 6;
+}
+
+static int quantize_dc_delta(int delta, int qp)
+{
+    const int scale = dequant_effective_scale(qp);
+    int level;
+
+    if (delta == 0) {
+        return 0;
+    }
+    if (delta > 0) {
+        level = (delta * 64 + (scale / 2)) / scale;
+    } else {
+        level = -(((-delta) * 64 + (scale / 2)) / scale);
+    }
+    if (level == 1) {
+        level = 2;
+    } else if (level == -1) {
+        level = -2;
+    }
+    if (level > 2047) {
+        level = 2047;
+    } else if (level < -2047) {
+        level = -2047;
+    }
+    return level;
+}
+
+static int predict_luma_dc(const sh264e_encoder_t *encoder, unsigned x, unsigned y)
+{
+    unsigned i;
+    int sum = 0;
+    const int have_top = y > 0u;
+    const int have_left = x > 0u;
+
+    if (!have_top && !have_left) {
+        return 128;
+    }
+    if (have_top) {
+        const uint8_t *top = encoder->recon_y + ((size_t)y - 1u) * SH264E_V1_WIDTH + x;
+        for (i = 0; i < 4u; i++) {
+            sum += top[i];
+        }
+    }
+    if (have_left) {
+        const uint8_t *left = encoder->recon_y + (size_t)y * SH264E_V1_WIDTH + x - 1u;
+        for (i = 0; i < 4u; i++) {
+            sum += left[(size_t)i * SH264E_V1_WIDTH];
+        }
+    }
+    if (have_top && have_left) {
+        return (sum + 4) >> 3;
+    }
+    return (sum + 2) >> 2;
+}
+
+static const uint8_t *frame_luma_row(const sh264e_frame_t *frame, unsigned y)
+{
+    return frame->plane[0] + (size_t)y * (size_t)frame->stride[0];
+}
+
+static uint8_t frame_chroma_sample(const sh264e_frame_t *frame, unsigned plane, unsigned x, unsigned y)
+{
+    if (frame->pixfmt == SH264E_PIXFMT_I420) {
+        return *(frame->plane[plane] + (size_t)y * (size_t)frame->stride[plane] + x);
+    }
+    return *(frame->plane[1] + (size_t)y * (size_t)frame->stride[1] + x * 2u + (plane == 1u ? 0u : 1u));
+}
+
+static int encode_luma4x4(sh264e_encoder_t *encoder,
+                          const sh264e_frame_t *frame,
+                          unsigned x,
+                          unsigned y)
+{
+    unsigned row;
+    unsigned col;
+    int sum_delta = 0;
+    const int pred = predict_luma_dc(encoder, x, y);
+    int level;
+    int recon_delta;
+
+    for (row = 0; row < 4u; row++) {
+        const uint8_t *src = frame_luma_row(frame, y + row) + x;
+        for (col = 0; col < 4u; col++) {
+            sum_delta += (int)src[col] - pred;
+        }
+    }
+
+    level = quantize_dc_delta((sum_delta + (sum_delta >= 0 ? 8 : -8)) / 16, encoder->config.qp);
+    recon_delta = inverse_dc_residual(level, encoder->config.qp);
+
+    for (row = 0; row < 4u; row++) {
+        uint8_t *dst = encoder->recon_y + (size_t)(y + row) * SH264E_V1_WIDTH + x;
+        for (col = 0; col < 4u; col++) {
+            dst[col] = (uint8_t)clip_u8(pred + recon_delta);
+        }
+    }
+
+    return level;
+}
+
+static int predict_chroma_dc(const uint8_t *recon, unsigned x, unsigned y)
+{
+    unsigned i;
+    int sum = 0;
+    const int have_top = y > 0u;
+    const int have_left = x > 0u;
+
+    if (!have_top && !have_left) {
+        return 128;
+    }
+    if (have_top) {
+        const uint8_t *top = recon + ((size_t)y - 1u) * SH264E_CHROMA_WIDTH + x;
+        for (i = 0; i < 8u; i++) {
+            sum += top[i];
+        }
+    }
+    if (have_left) {
+        const uint8_t *left = recon + (size_t)y * SH264E_CHROMA_WIDTH + x - 1u;
+        for (i = 0; i < 8u; i++) {
+            sum += left[(size_t)i * SH264E_CHROMA_WIDTH];
+        }
+    }
+    if (have_top && have_left) {
+        return (sum + 8) >> 4;
+    }
+    return (sum + 4) >> 3;
+}
+
+static int encode_chroma8x8_dc(sh264e_encoder_t *encoder,
+                               const sh264e_frame_t *frame,
+                               unsigned plane,
+                               unsigned x,
+                               unsigned y)
+{
+    unsigned row;
+    unsigned col;
+    int sum_delta = 0;
+    uint8_t *recon = plane == 1u ? encoder->recon_u : encoder->recon_v;
+    const int pred = predict_chroma_dc(recon, x, y);
+    int level;
+    int recon_delta;
+
+    for (row = 0; row < 8u; row++) {
+        for (col = 0; col < 8u; col++) {
+            sum_delta += (int)frame_chroma_sample(frame, plane, x + col, y + row) - pred;
+        }
+    }
+
+    level = quantize_dc_delta((sum_delta + (sum_delta >= 0 ? 32 : -32)) / 64, encoder->config.qp);
+    if (level > 0) {
+        level = 1;
+    } else if (level < 0) {
+        level = -1;
+    }
+    recon_delta = inverse_dc_residual(level, encoder->config.qp);
+
+    for (row = 0; row < 8u; row++) {
+        uint8_t *dst = recon + (size_t)(y + row) * SH264E_CHROMA_WIDTH + x;
+        for (col = 0; col < 8u; col++) {
+            dst[col] = (uint8_t)clip_u8(pred + recon_delta);
+        }
+    }
+
+    return level;
+}
+
+static void write_coeff_token_one_or_zero(sh264e_bit_writer_t *bw, int has_coeff)
+{
+    if (has_coeff == 0) {
+        bw_write_bit(bw, 1);             /* TotalCoeff=0 for nC 0..1 */
+    } else {
+        bw_write_bits(bw, 0x05u, 6);     /* TotalCoeff=1, TrailingOnes=0 for nC 0..1 */
+    }
+}
+
+static uint32_t cavlc_parsed_level_code(unsigned prefix, unsigned suffix_length, uint32_t suffix)
+{
+    uint32_t level_code = ((prefix < 15u ? prefix : 15u) << suffix_length) + suffix;
+    if (prefix >= 15u && suffix_length == 0u) {
+        level_code += 15u;
+    }
+    if (prefix >= 16u) {
+        level_code += (1u << (prefix - 3u)) - 4096u;
+    }
+    return level_code;
+}
+
+static int write_cavlc_level(sh264e_bit_writer_t *bw, int level)
+{
+    const uint32_t sign = level < 0 ? 1u : 0u;
+    const uint32_t abs_level = (uint32_t)(level < 0 ? -level : level);
+    const uint32_t final_level_code = (abs_level * 2u) - 2u + sign;
+    const uint32_t target = final_level_code - 2u;
+    unsigned prefix;
+
+    for (prefix = 0; prefix < 32u; prefix++) {
+        unsigned suffix_size = 0;
+        uint32_t suffix_limit = 1u;
+        uint32_t suffix;
+
+        if (prefix == 14u) {
+            suffix_size = 4u;
+        } else if (prefix >= 15u) {
+            suffix_size = prefix - 3u;
+            if (suffix_size > 20u) {
+                return 0;
+            }
+        }
+        suffix_limit = 1u << suffix_size;
+        for (suffix = 0; suffix < suffix_limit; suffix++) {
+            if (cavlc_parsed_level_code(prefix, 0, suffix) == target) {
+                unsigned i;
+                for (i = 0; i < prefix; i++) {
+                    bw_write_bit(bw, 0);
+                }
+                bw_write_bit(bw, 1);
+                if (suffix_size > 0u) {
+                    bw_write_bits(bw, suffix, suffix_size);
+                }
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static void write_residual_dc_only(sh264e_bit_writer_t *bw, int level)
+{
+    if (level == 0) {
+        write_coeff_token_one_or_zero(bw, 0);
+        return;
+    }
+    if (level == 1) {
+        level = 2;
+    } else if (level == -1) {
+        level = -2;
+    }
+    write_coeff_token_one_or_zero(bw, 1);
+    if (!write_cavlc_level(bw, level)) {
+        bw->error = 1;
+        return;
+    }
+    bw_write_bit(bw, 1);                 /* total_zeros = 0 for TotalCoeff=1 */
+}
+
+static void write_chroma_dc_residual(sh264e_bit_writer_t *bw, int level)
+{
+    if (level == 0) {
+        bw_write_bits(bw, 0x03u, 6);     /* TotalCoeff=0 for chroma DC */
+        return;
+    }
+    bw_write_bit(bw, 1);                 /* TotalCoeff=1, TrailingOnes=1 for chroma DC */
+    bw_write_bit(bw, level < 0 ? 1u : 0u);
+    bw_write_bit(bw, 1);                 /* total_zeros = 0 for TotalCoeff=1 */
+}
+
+static void set_luma_nz(sh264e_encoder_t *encoder, unsigned block_x, unsigned block_y, uint8_t nz)
+{
+    encoder->nz_luma[(size_t)block_y * SH264E_LUMA4_X + block_x] = nz;
+}
+
+static sh264e_status_t make_idr_slice(sh264e_encoder_t *encoder,
+                                      const sh264e_frame_t *frame,
+                                      uint8_t *out,
+                                      size_t capacity,
+                                      size_t *offset)
+{
+    sh264e_bit_writer_t bw;
+    unsigned mb_y;
+    unsigned mb_x;
+
+    memset(encoder->nz_luma, 0, (size_t)SH264E_LUMA4_X * SH264E_LUMA4_Y);
+
+    bw_init(&bw, encoder->rbsp, encoder->rbsp_capacity);
+
+    bw_write_ue(&bw, 0);                 /* first_mb_in_slice */
+    bw_write_ue(&bw, 7);                 /* slice_type: all I slices */
+    bw_write_ue(&bw, 0);                 /* pic_parameter_set_id */
+    bw_write_bits(&bw, 0, 4);            /* frame_num */
+    bw_write_ue(&bw, 0);                 /* idr_pic_id */
+    bw_write_bits(&bw, 0, 4);            /* pic_order_cnt_lsb */
+    bw_write_bit(&bw, 0);                /* no_output_of_prior_pics_flag */
+    bw_write_bit(&bw, 0);                /* long_term_reference_flag */
+    bw_write_se(&bw, 0);                 /* slice_qp_delta */
+    bw_write_ue(&bw, 1);                 /* disable_deblocking_filter_idc */
+
+    for (mb_y = 0; mb_y < SH264E_MBS_Y; mb_y++) {
+        for (mb_x = 0; mb_x < SH264E_MBS_X; mb_x++) {
+            int levels[16];
+            int chroma_dc[2];
+            unsigned b;
+            unsigned cbp_luma = 0;
+            unsigned cbp_chroma;
+            unsigned cbp;
+
+            for (b = 0; b < 16u; b++) {
+                const unsigned x = mb_x * 16u + k_luma4x4_x[b];
+                const unsigned y = mb_y * 16u + k_luma4x4_y[b];
+                const int level = encode_luma4x4(encoder, frame, x, y);
+                const unsigned block_x = x / 4u;
+                const unsigned block_y = y / 4u;
+                levels[b] = level;
+                set_luma_nz(encoder, block_x, block_y, level != 0 ? 1u : 0u);
+                if (level != 0) {
+                    cbp_luma |= 1u << (b / 4u);
+                }
+            }
+
+            chroma_dc[0] = encode_chroma8x8_dc(encoder, frame, 1u, mb_x * 8u, mb_y * 8u);
+            chroma_dc[1] = encode_chroma8x8_dc(encoder, frame, 2u, mb_x * 8u, mb_y * 8u);
+            cbp_chroma = (chroma_dc[0] != 0 || chroma_dc[1] != 0) ? 1u : 0u;
+            cbp = cbp_luma + cbp_chroma * 16u;
+
+            bw_write_ue(&bw, 0);                         /* mb_type: I_NxN */
+            for (b = 0; b < 16u; b++) {
+                bw_write_bit(&bw, 1);                    /* prev_intra4x4_pred_mode_flag */
+            }
+            bw_write_ue(&bw, 0);                         /* intra_chroma_pred_mode: DC */
+            bw_write_ue(&bw, k_cbp_intra_code_num[cbp]);
+
+            if (cbp != 0u) {
+                bw_write_se(&bw, 0);                     /* mb_qp_delta */
+                for (b = 0; b < 16u; b++) {
+                    if ((cbp_luma & (1u << (b / 4u))) != 0u) {
+                        write_residual_dc_only(&bw, levels[b]);
+                    }
+                }
+                if (cbp_chroma != 0u) {
+                    write_chroma_dc_residual(&bw, chroma_dc[0]);
+                    write_chroma_dc_residual(&bw, chroma_dc[1]);
+                }
+            }
+
+            if (bw.error != 0) {
+                return SH264E_ERR_INTERNAL;
+            }
+        }
+    }
+
+    bw_rbsp_trailing_bits(&bw);
+    if (bw.error != 0) {
+        return SH264E_ERR_INTERNAL;
+    }
+    return append_annexb_nalu(out, capacity, offset, 0x65u, encoder->rbsp, bw_size(&bw));
+}
+
+sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,
+                                      sh264e_encoder_t **out_encoder)
+{
+    sh264e_status_t status;
+    sh264e_encoder_t *encoder;
+    size_t max_output_size = 0;
+    sh264e_config_t normalized;
+
+    if (out_encoder == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    *out_encoder = NULL;
+    if (config == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+
+    normalized = *config;
+    if (normalized.qp == 0) {
+        normalized.qp = SH264E_DEFAULT_QP;
+    }
+
+    status = validate_config(&normalized);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    status = sh264e_get_max_output_size(&normalized, &max_output_size);
+    if (status != SH264E_OK) {
+        return status;
+    }
+
+    encoder = (sh264e_encoder_t *)calloc(1u, sizeof(*encoder));
+    if (encoder == NULL) {
+        return SH264E_ERR_ALLOCATION_FAILED;
+    }
+    encoder->config = normalized;
+    encoder->rbsp_capacity = max_output_size;
+    encoder->rbsp = (uint8_t *)malloc(encoder->rbsp_capacity);
+    encoder->recon_y = (uint8_t *)malloc((size_t)SH264E_V1_WIDTH * SH264E_V1_HEIGHT);
+    encoder->recon_u = (uint8_t *)malloc((size_t)SH264E_CHROMA_WIDTH * SH264E_CHROMA_HEIGHT);
+    encoder->recon_v = (uint8_t *)malloc((size_t)SH264E_CHROMA_WIDTH * SH264E_CHROMA_HEIGHT);
+    encoder->nz_luma = (uint8_t *)malloc((size_t)SH264E_LUMA4_X * SH264E_LUMA4_Y);
+
+    if (encoder->rbsp == NULL || encoder->recon_y == NULL || encoder->recon_u == NULL ||
+        encoder->recon_v == NULL || encoder->nz_luma == NULL) {
+        sh264e_encoder_destroy(encoder);
+        return SH264E_ERR_ALLOCATION_FAILED;
+    }
+
+    *out_encoder = encoder;
+    return SH264E_OK;
+}
+
+void sh264e_encoder_destroy(sh264e_encoder_t *encoder)
+{
+    if (encoder == NULL) {
+        return;
+    }
+    free(encoder->rbsp);
+    free(encoder->recon_y);
+    free(encoder->recon_u);
+    free(encoder->recon_v);
+    free(encoder->nz_luma);
+    free(encoder);
+}
+
+sh264e_status_t sh264e_get_max_output_size(const sh264e_config_t *config, size_t *out_size)
+{
+    sh264e_status_t status;
+    sh264e_config_t normalized;
+    size_t input_size;
+
+    if (config == NULL || out_size == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    normalized = *config;
+    if (normalized.qp == 0) {
+        normalized.qp = SH264E_DEFAULT_QP;
+    }
+    status = validate_config(&normalized);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    input_size = (size_t)normalized.width * normalized.height * 3u / 2u;
+    *out_size = input_size * 2u + 4096u;
+    return SH264E_OK;
+}
+
+sh264e_status_t sh264e_encode_idr(sh264e_encoder_t *encoder,
+                                  const sh264e_frame_t *frame,
+                                  uint8_t *out,
+                                  size_t out_capacity,
+                                  size_t *out_size)
+{
+    sh264e_status_t status;
+    size_t offset = 0;
+
+    if (encoder == NULL || frame == NULL || out == NULL || out_size == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    *out_size = 0;
+    status = validate_frame(&encoder->config, frame);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    if (out_capacity == 0u) {
+        return SH264E_ERR_BUFFER_TOO_SMALL;
+    }
+
+    memset(encoder->recon_y, 0, (size_t)SH264E_V1_WIDTH * SH264E_V1_HEIGHT);
+    memset(encoder->recon_u, 128, (size_t)SH264E_CHROMA_WIDTH * SH264E_CHROMA_HEIGHT);
+    memset(encoder->recon_v, 128, (size_t)SH264E_CHROMA_WIDTH * SH264E_CHROMA_HEIGHT);
+
+    status = make_sps(encoder, out, out_capacity, &offset);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    status = make_pps(encoder, out, out_capacity, &offset);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    status = make_idr_slice(encoder, frame, out, out_capacity, &offset);
+    if (status != SH264E_OK) {
+        return status;
+    }
+
+    *out_size = offset;
+    return SH264E_OK;
+}
+
+const char *sh264e_status_string(sh264e_status_t status)
+{
+    switch (status) {
+    case SH264E_OK:
+        return "ok";
+    case SH264E_ERR_INVALID_ARGUMENT:
+        return "invalid argument";
+    case SH264E_ERR_UNSUPPORTED_CONFIG:
+        return "unsupported config";
+    case SH264E_ERR_BUFFER_TOO_SMALL:
+        return "buffer too small";
+    case SH264E_ERR_ALLOCATION_FAILED:
+        return "allocation failed";
+    case SH264E_ERR_INTERNAL:
+        return "internal error";
+    default:
+        return "unknown error";
+    }
+}
