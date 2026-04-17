@@ -396,6 +396,16 @@ def main():
                 str(jpeg_input),
                 str(workdir / "output_jpeg_arena_too_small.h264"),
             ], stderr_contains="buffer too small")
+            run_expect_fail([
+                args.jpeg_encoder,
+                "--streaming-prototype",
+                "--test-arena-shrink",
+                "1",
+                "--format",
+                "i420",
+                str(jpeg_input),
+                str(workdir / "output_jpeg_streaming_arena_too_small.h264"),
+            ], stderr_contains="buffer too small")
             offset_arena_output = workdir / "output_jpeg_arena_offset_i420.h264"
             encode_jpeg(args, "i420", jpeg_input, offset_arena_output,
                         ["--test-arena-offset", "1"])
