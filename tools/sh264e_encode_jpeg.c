@@ -5,11 +5,21 @@
 #include <string.h>
 
 void sh264e_jpeg_set_test_allocation_limit(size_t max_bytes);
+size_t sh264e_jpeg_get_last_streaming_cache_bytes(void);
+sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype(sh264e_encoder_t *encoder,
+                                                           const uint8_t *jpeg_data,
+                                                           size_t jpeg_size,
+                                                           uint8_t *work_buffer,
+                                                           size_t work_buffer_capacity,
+                                                           uint8_t *out,
+                                                           size_t out_capacity,
+                                                           size_t *out_size);
 
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-            "usage: %s [--test-allocation-limit BYTES] [--test-arena-shrink BYTES] "
+            "usage: %s [--streaming-prototype] [--test-allocation-limit BYTES] "
+            "[--test-arena-shrink BYTES] "
             "--format i420|nv12 input.jpg output.h264\n",
             argv0);
 }
@@ -112,17 +122,21 @@ int main(int argc, char **argv)
     size_t output_size = 0;
     size_t allocation_limit = (size_t)-1;
     size_t arena_shrink = 0;
+    int streaming_prototype = 0;
     int argi = 1;
     int rc = 1;
 
-    while (argi + 1 < argc) {
-        if (strcmp(argv[argi], "--test-allocation-limit") == 0) {
+    while (argi < argc) {
+        if (strcmp(argv[argi], "--streaming-prototype") == 0) {
+            streaming_prototype = 1;
+            argi++;
+        } else if (argi + 1 < argc && strcmp(argv[argi], "--test-allocation-limit") == 0) {
             if (!parse_size(argv[argi + 1], &allocation_limit)) {
                 usage(argv[0]);
                 return 2;
             }
             argi += 2;
-        } else if (strcmp(argv[argi], "--test-arena-shrink") == 0) {
+        } else if (argi + 1 < argc && strcmp(argv[argi], "--test-arena-shrink") == 0) {
             if (!parse_size(argv[argi + 1], &arena_shrink)) {
                 usage(argv[0]);
                 return 2;
@@ -145,7 +159,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "failed to read JPEG input: %s\n", input_path);
         goto done;
     }
-    if (allocation_limit == (size_t)-1) {
+    if (streaming_prototype && (allocation_limit != (size_t)-1 || arena_shrink != 0u)) {
+        fprintf(stderr, "--streaming-prototype cannot be combined with allocation test options\n");
+        goto done;
+    }
+    if (allocation_limit == (size_t)-1 && !streaming_prototype) {
         status = sh264e_jpeg_get_work_size(jpeg_data, jpeg_size, &jpeg_work_size);
         if (status != SH264E_OK) {
             fprintf(stderr, "sh264e_jpeg_get_work_size failed: %s\n", sh264e_status_string(status));
@@ -179,7 +197,7 @@ int main(int argc, char **argv)
         goto done;
     }
 
-    if (allocation_limit == (size_t)-1) {
+    if (allocation_limit == (size_t)-1 && !streaming_prototype) {
         jpeg_arena = (uint8_t *)malloc(jpeg_arena_size);
         if (jpeg_arena == NULL) {
             fprintf(stderr, "failed to allocate JPEG arena\n");
@@ -204,6 +222,10 @@ int main(int argc, char **argv)
         status = sh264e_encode_jpeg_idr(encoder, jpeg_data, jpeg_size,
                                         work, work_size,
                                         output_buf, output_capacity, &output_size);
+    } else if (streaming_prototype) {
+        status = sh264e_encode_jpeg_idr_streaming_prototype(encoder, jpeg_data, jpeg_size,
+                                                            work, work_size,
+                                                            output_buf, output_capacity, &output_size);
     } else {
         status = sh264e_encode_jpeg_idr_with_arena(encoder, jpeg_data, jpeg_size,
                                                    jpeg_arena, jpeg_arena_size,
@@ -236,6 +258,9 @@ int main(int argc, char **argv)
         printf("jpeg work arena bytes: %zu\n", jpeg_work_size);
         printf("jpeg current allocation bytes: %zu\n", stats.current_bytes);
         printf("jpeg peak allocation bytes: %zu\n", stats.peak_bytes);
+        if (streaming_prototype) {
+            printf("jpeg streaming cache bytes: %zu\n", sh264e_jpeg_get_last_streaming_cache_bytes());
+        }
     }
     printf("encoded JPEG input to progressive IDR frame\n");
     rc = 0;

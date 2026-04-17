@@ -136,6 +136,7 @@ if(SH264E_BUILD_TESTS)
     find_package(Python3 COMPONENTS Interpreter)
     find_program(SH264E_FFPROBE ffprobe)
     find_program(SH264E_FFMPEG ffmpeg)
+    find_program(SH264E_CJPEG cjpeg)
     find_program(SH264E_ARM_NONE_EABI_GCC arm-none-eabi-gcc)
     find_program(SH264E_QEMU_SYSTEM_ARM qemu-system-arm)
     set(SH264E_CAN_BUILD_QEMU_TESTS OFF)
@@ -163,17 +164,23 @@ if(SH264E_BUILD_TESTS)
         message(STATUS "Skipping QEMU firmware tests: arm-none-eabi-gcc or qemu-system-arm was not found")
     endif()
     if(Python3_Interpreter_FOUND AND SH264E_FFPROBE AND SH264E_FFMPEG AND SH264E_BUILD_TOOLS)
+        set(SH264E_FFMPEG_INTEGRATION_ARGS
+            --encoder $<TARGET_FILE:sh264e_encode_file>
+            --progressive-encoder $<TARGET_FILE:sh264e_encode_file_progressive>
+            --resize-encoder $<TARGET_FILE:sh264e_resize_encode_progressive>
+            --jpeg-encoder $<TARGET_FILE:sh264e_encode_jpeg>
+            --ffprobe ${SH264E_FFPROBE}
+            --ffmpeg ${SH264E_FFMPEG}
+            --workdir ${CMAKE_CURRENT_BINARY_DIR}/integration
+        )
+        if(SH264E_CJPEG)
+            list(APPEND SH264E_FFMPEG_INTEGRATION_ARGS --cjpeg ${SH264E_CJPEG})
+        endif()
         add_test(
             NAME sh264e_ffmpeg_integration
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_ffmpeg_integration.py
-                --encoder $<TARGET_FILE:sh264e_encode_file>
-                --progressive-encoder $<TARGET_FILE:sh264e_encode_file_progressive>
-                --resize-encoder $<TARGET_FILE:sh264e_resize_encode_progressive>
-                --jpeg-encoder $<TARGET_FILE:sh264e_encode_jpeg>
-                --ffprobe ${SH264E_FFPROBE}
-                --ffmpeg ${SH264E_FFMPEG}
-                --workdir ${CMAKE_CURRENT_BINARY_DIR}/integration
+                ${SH264E_FFMPEG_INTEGRATION_ARGS}
         )
     endif()
 

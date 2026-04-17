@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import subprocess
 from pathlib import Path
 
@@ -133,6 +134,53 @@ def validate_image_pix_fmt(ffprobe, image, expected_pix_fmt):
         raise RuntimeError(f"{image} pix_fmt: got {got}, expected {expected_pix_fmt}")
 
 
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def decode_i420_frame(args, bitstream, raw_output):
+    run([
+        args.ffmpeg,
+        "-y",
+        "-v",
+        "error",
+        "-i",
+        str(bitstream),
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "yuv420p",
+        str(raw_output),
+    ])
+    expected_size = WIDTH * HEIGHT * 3 // 2
+    got_size = raw_output.stat().st_size
+    if got_size != expected_size:
+        raise RuntimeError(
+            f"decoded frame size mismatch for {bitstream}: got {got_size}, expected {expected_size}"
+        )
+    return sha256_file(raw_output)
+
+
+def compare_decoded_i420(args, reference_bitstream, candidate_bitstream, stem):
+    workdir = Path(args.workdir)
+    reference_raw = workdir / f"{stem}_reference.yuv"
+    candidate_raw = workdir / f"{stem}_candidate.yuv"
+    reference_hash = decode_i420_frame(args, reference_bitstream, reference_raw)
+    candidate_hash = decode_i420_frame(args, candidate_bitstream, candidate_raw)
+    if reference_hash != candidate_hash:
+        raise RuntimeError(
+            "decoded frame mismatch between component-plane and streaming JPEG paths: "
+            f"{reference_hash} != {candidate_hash}"
+        )
+
+
 def run_case(args, fmt, make_input):
     yuv = Path(args.workdir) / f"input_{fmt}.yuv"
     bitstream = Path(args.workdir) / f"output_{fmt}.h264"
@@ -160,6 +208,48 @@ def make_color_jpeg(args, path, pix_fmt):
     validate_image_pix_fmt(args.ffprobe, path, pix_fmt)
 
 
+def make_restart_marker_jpeg(args, path):
+    ppm = path.with_suffix(".ppm")
+    with ppm.open("wb") as f:
+        f.write(f"P6\n{SMALL_WIDTH} {SMALL_HEIGHT}\n255\n".encode("ascii"))
+        for y in range(SMALL_HEIGHT):
+            row = bytearray()
+            for x in range(SMALL_WIDTH):
+                row.extend((
+                    (x // 5 + y // 3) & 0xFF,
+                    (64 + x // 7) & 0xFF,
+                    (192 + y // 5) & 0xFF,
+                ))
+            f.write(row)
+    run([
+        args.cjpeg,
+        "-baseline",
+        "-quality",
+        "85",
+        "-sample",
+        "2x2,1x1,1x1",
+        "-restart",
+        "1",
+        "-outfile",
+        str(path),
+        str(ppm),
+    ])
+    validate_image_pix_fmt(args.ffprobe, path, "yuvj420p")
+    validate_jpeg_restart_markers(path)
+
+
+def validate_jpeg_restart_markers(path):
+    data = path.read_bytes()
+    if b"\xff\xdd" not in data:
+        raise RuntimeError(f"{path} is missing a JPEG DRI marker")
+    restart_count = 0
+    for i in range(len(data) - 1):
+        if data[i] == 0xFF and 0xD0 <= data[i + 1] <= 0xD7:
+            restart_count += 1
+    if restart_count == 0:
+        raise RuntimeError(f"{path} is missing JPEG RST markers")
+
+
 def encode_jpeg(args, fmt, jpeg_input, bitstream):
     result = run_capture([args.jpeg_encoder, "--format", fmt, str(jpeg_input), str(bitstream)])
     if "jpeg current allocation bytes: 0" not in result.stdout:
@@ -174,6 +264,30 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream):
     raise RuntimeError(f"JPEG encoder did not report peak allocation bytes: {result.stdout!r}")
 
 
+def encode_jpeg_streaming_prototype(args, jpeg_input, bitstream):
+    result = run_capture([
+        args.jpeg_encoder,
+        "--streaming-prototype",
+        "--format",
+        "i420",
+        str(jpeg_input),
+        str(bitstream),
+    ])
+    if "jpeg current allocation bytes: 0" not in result.stdout:
+        raise RuntimeError(f"streaming JPEG prototype leaked tracked allocations: {result.stdout!r}")
+    peak = None
+    cache = None
+    for line in result.stdout.splitlines():
+        if line.startswith("jpeg peak allocation bytes:"):
+            peak = int(line.rsplit(" ", 1)[1])
+        if line.startswith("jpeg streaming cache bytes:"):
+            cache = int(line.rsplit(" ", 1)[1])
+    if peak is None or peak >= 1382400:
+        raise RuntimeError(f"streaming JPEG prototype did not reduce NanoJPEG allocation peak: {result.stdout!r}")
+    if cache is None or cache == 0:
+        raise RuntimeError(f"streaming JPEG prototype did not report cache bytes: {result.stdout!r}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--encoder", required=True)
@@ -182,6 +296,7 @@ def main():
     parser.add_argument("--jpeg-encoder", required=True)
     parser.add_argument("--ffprobe", required=True)
     parser.add_argument("--ffmpeg", required=True)
+    parser.add_argument("--cjpeg")
     parser.add_argument("--workdir", required=True)
     args = parser.parse_args()
 
@@ -266,10 +381,28 @@ def main():
                 str(jpeg_input),
                 str(workdir / "output_jpeg_arena_too_small.h264"),
             ], stderr_contains="buffer too small")
+        streaming_output = workdir / f"output_jpeg_streaming_{pix_fmt}_i420.h264"
+        encode_jpeg_streaming_prototype(args, jpeg_input, streaming_output)
+        validate_bitstream(args.ffprobe, args.ffmpeg, streaming_output)
         for fmt in ("i420", "nv12"):
             jpeg_output = workdir / f"output_jpeg_{pix_fmt}_{fmt}.h264"
             encode_jpeg(args, fmt, jpeg_input, jpeg_output)
             validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
+            if fmt == "i420":
+                compare_decoded_i420(args, jpeg_output, streaming_output,
+                                     f"output_jpeg_{pix_fmt}_i420_streaming_compare")
+
+    if args.cjpeg:
+        restart_jpeg_input = workdir / "input_720p_yuvj420p_restart.jpg"
+        make_restart_marker_jpeg(args, restart_jpeg_input)
+        restart_streaming_output = workdir / "output_jpeg_streaming_yuvj420p_restart_i420.h264"
+        restart_jpeg_output = workdir / "output_jpeg_yuvj420p_restart_i420.h264"
+        encode_jpeg_streaming_prototype(args, restart_jpeg_input, restart_streaming_output)
+        validate_bitstream(args.ffprobe, args.ffmpeg, restart_streaming_output)
+        encode_jpeg(args, "i420", restart_jpeg_input, restart_jpeg_output)
+        validate_bitstream(args.ffprobe, args.ffmpeg, restart_jpeg_output)
+        compare_decoded_i420(args, restart_jpeg_output, restart_streaming_output,
+                             "output_jpeg_yuvj420p_restart_i420_streaming_compare")
 
     grayscale_jpeg_input = workdir / "input_gray_720p.jpg"
     run([

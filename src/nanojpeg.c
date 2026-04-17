@@ -143,6 +143,9 @@ nj_result_t njDecode(const void* jpeg, const int size);
 // grayscale planes, including their native dimensions and stride.
 nj_result_t njDecodeComponents(const void* jpeg, const int size);
 
+typedef int (*nj_mcu_row_callback_t)(int mcu_y, void* user);
+nj_result_t njDecodeMcuRows(const void* jpeg, const int size, nj_mcu_row_callback_t callback, void* user);
+
 // njGetWidth: Return the width (in pixels) of the most recently decoded
 // image. If njDecode() failed, the result of njGetWidth() is undefined.
 int njGetWidth(void);
@@ -175,6 +178,9 @@ const unsigned char* njGetComponentPixels(int index);
 int njGetComponentWidth(int index);
 int njGetComponentHeight(int index);
 int njGetComponentStride(int index);
+int njGetComponentSsx(int index);
+int njGetComponentSsy(int index);
+int njGetMcuRowCount(void);
 
 // njDone: Uninitialize NanoJPEG.
 // Resets NanoJPEG's internal state and frees all memory that has been
@@ -343,6 +349,9 @@ typedef struct _nj_ctx {
     int rstinterval;
     unsigned char *rgb;
     int decode_components_only;
+    int decode_mcu_rows_only;
+    nj_mcu_row_callback_t mcu_row_callback;
+    void* mcu_row_user;
 } nj_context_t;
 
 static nj_context_t nj;
@@ -577,11 +586,12 @@ NJ_INLINE void njDecodeSOF(void) {
     nj.mbwidth = (nj.width + nj.mbsizex - 1) / nj.mbsizex;
     nj.mbheight = (nj.height + nj.mbsizey - 1) / nj.mbsizey;
     for (i = 0, c = nj.comp;  i < nj.ncomp;  ++i, ++c) {
+        const int allocated_rows = nj.decode_mcu_rows_only ? (c->ssy << 3) : (nj.mbheight * c->ssy << 3);
         c->width = (nj.width * c->ssx + ssxmax - 1) / ssxmax;
         c->height = (nj.height * c->ssy + ssymax - 1) / ssymax;
         c->stride = nj.mbwidth * c->ssx << 3;
         if (((c->width < 3) && (c->ssx != ssxmax)) || ((c->height < 3) && (c->ssy != ssymax))) njThrow(NJ_UNSUPPORTED);
-        if (!(c->pixels = (unsigned char*) njAllocMem(c->stride * nj.mbheight * c->ssy << 3))) njThrow(NJ_OUT_OF_MEM);
+        if (!(c->pixels = (unsigned char*) njAllocMem(c->stride * allocated_rows))) njThrow(NJ_OUT_OF_MEM);
     }
     if ((nj.ncomp == 3) && !nj.decode_components_only) {
         nj.rgb = (unsigned char*) njAllocMem(nj.width * nj.height * nj.ncomp);
@@ -713,11 +723,15 @@ NJ_INLINE void njDecodeScan(void) {
         for (i = 0, c = nj.comp;  i < nj.ncomp;  ++i, ++c)
             for (sby = 0;  sby < c->ssy;  ++sby)
                 for (sbx = 0;  sbx < c->ssx;  ++sbx) {
-                    njDecodeBlock(c, &c->pixels[((mby * c->ssy + sby) * c->stride + mbx * c->ssx + sbx) << 3]);
+                    const int row = nj.decode_mcu_rows_only ? sby : (mby * c->ssy + sby);
+                    njDecodeBlock(c, &c->pixels[(row * c->stride + mbx * c->ssx + sbx) << 3]);
                     njCheckError();
                 }
         if (++mbx >= nj.mbwidth) {
             mbx = 0;
+            if (nj.decode_mcu_rows_only && nj.mcu_row_callback) {
+                if (nj.mcu_row_callback(mby, nj.mcu_row_user)) njThrow(NJ_INTERNAL_ERR);
+            }
             if (++mby >= nj.mbheight) break;
         }
         if (nj.rstinterval && !(--rstcount)) {
@@ -893,9 +907,17 @@ void njDone(void) {
     njInit();
 }
 
-static nj_result_t njDecodeInternal(const void* jpeg, const int size, int components_only) {
+static nj_result_t njDecodeInternal(const void* jpeg,
+                                    const int size,
+                                    int components_only,
+                                    int mcu_rows_only,
+                                    nj_mcu_row_callback_t callback,
+                                    void* user) {
     njDone();
     nj.decode_components_only = components_only;
+    nj.decode_mcu_rows_only = mcu_rows_only;
+    nj.mcu_row_callback = callback;
+    nj.mcu_row_user = user;
     nj.pos = (const unsigned char*) jpeg;
     nj.size = size & 0x7FFFFFFF;
     if (nj.size < 2) return NJ_NO_JPEG;
@@ -925,11 +947,16 @@ static nj_result_t njDecodeInternal(const void* jpeg, const int size, int compon
 }
 
 nj_result_t njDecode(const void* jpeg, const int size) {
-    return njDecodeInternal(jpeg, size, 0);
+    return njDecodeInternal(jpeg, size, 0, 0, NULL, NULL);
 }
 
 nj_result_t njDecodeComponents(const void* jpeg, const int size) {
-    return njDecodeInternal(jpeg, size, 1);
+    return njDecodeInternal(jpeg, size, 1, 0, NULL, NULL);
+}
+
+nj_result_t njDecodeMcuRows(const void* jpeg, const int size, nj_mcu_row_callback_t callback, void* user) {
+    if (!callback) return NJ_INTERNAL_ERR;
+    return njDecodeInternal(jpeg, size, 1, 1, callback, user);
 }
 
 int njGetWidth(void)            { return nj.width; }
@@ -954,5 +981,14 @@ int njGetComponentStride(int index) {
     if ((index < 0) || (index >= nj.ncomp)) return 0;
     return nj.comp[index].stride;
 }
+int njGetComponentSsx(int index) {
+    if ((index < 0) || (index >= nj.ncomp)) return 0;
+    return nj.comp[index].ssx;
+}
+int njGetComponentSsy(int index) {
+    if ((index < 0) || (index >= nj.ncomp)) return 0;
+    return nj.comp[index].ssy;
+}
+int njGetMcuRowCount(void)     { return nj.mbheight; }
 
 #endif // _NJ_INCLUDE_HEADER_ONLY
