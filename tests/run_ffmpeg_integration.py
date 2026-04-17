@@ -242,7 +242,6 @@ def main():
             validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
 
     grayscale_jpeg_input = workdir / "input_gray_720p.jpg"
-    grayscale_jpeg_output = workdir / "output_jpeg_gray_i420.h264"
     run([
         args.ffmpeg,
         "-y",
@@ -260,8 +259,12 @@ def main():
         "3",
         str(grayscale_jpeg_input),
     ])
-    run([args.jpeg_encoder, "--format", "i420", str(grayscale_jpeg_input), str(grayscale_jpeg_output)])
-    validate_bitstream(args.ffprobe, args.ffmpeg, grayscale_jpeg_output)
+    # Some FFmpeg MJPEG builds encode gray sources as yuvj444p, so only the
+    # color subsampling fixtures assert exact JPEG component layout.
+    for fmt in ("i420", "nv12"):
+        grayscale_jpeg_output = workdir / f"output_jpeg_gray_{fmt}.h264"
+        run([args.jpeg_encoder, "--format", fmt, str(grayscale_jpeg_input), str(grayscale_jpeg_output)])
+        validate_bitstream(args.ffprobe, args.ffmpeg, grayscale_jpeg_output)
 
 
 if __name__ == "__main__":
