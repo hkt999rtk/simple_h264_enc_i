@@ -12,6 +12,7 @@ This project is intentionally small and narrow in scope:
 * Baseline / Constrained Baseline compatible CAVLC bitstream
 * No file I/O inside the encoder library
 * Progressive slice API for lower SRAM footprint and input bandwidth
+* Core fixed-point bilinear scaler for resizing source YUV420 into encoder slices
 
 The encoder is designed for validation and offline experiments, not compression efficiency.
 
@@ -69,6 +70,7 @@ The test suite covers:
 * SPS/PPS/IDR Annex B NALU sequence
 * library boundary check for forbidden file I/O calls
 * ffmpeg/ffprobe integration when those tools are available
+* Cortex-M QEMU scaler smoke test when `arm-none-eabi-gcc` and `qemu-system-arm` are available
 
 ## CLI Example
 
@@ -100,8 +102,8 @@ The resize tool accepts even source dimensions in the bilinear-friendly range:
 720  <= src_height <= 2880
 ```
 
-It reads a full source frame for file-based validation, then generates one 2560x16 luma / 8-row chroma output slice at a time and immediately feeds that slice to the progressive encoder.
-The scaler uses fixed-point bilinear interpolation.
+It reads a full source frame for file-based validation, then calls the library scaler to generate one 2560x16 luma / 8-row chroma output slice at a time and immediately feeds that slice to the progressive encoder.
+The library scaler uses fixed-point bilinear interpolation. When the source is already 2560x1440, `sh264e_resize_make_slice` bypasses scaling and points the output slice directly into the source frame.
 
 Validate with ffmpeg:
 
@@ -133,6 +135,11 @@ Progressive entry points:
 * `sh264e_end_idr`
 * `sh264e_get_max_header_output_size`
 * `sh264e_get_max_slice_output_size`
+
+Resize entry points:
+
+* `sh264e_resize_get_slice_buffer_size`
+* `sh264e_resize_make_slice`
 
 Frame-mode convenience entry points:
 

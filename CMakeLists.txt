@@ -107,6 +107,8 @@ if(SH264E_BUILD_TESTS)
     find_package(Python3 COMPONENTS Interpreter)
     find_program(SH264E_FFPROBE ffprobe)
     find_program(SH264E_FFMPEG ffmpeg)
+    find_program(SH264E_ARM_NONE_EABI_GCC arm-none-eabi-gcc)
+    find_program(SH264E_QEMU_SYSTEM_ARM qemu-system-arm)
     if(Python3_Interpreter_FOUND AND SH264E_FFPROBE AND SH264E_FFMPEG AND SH264E_BUILD_TOOLS)
         add_test(
             NAME sh264e_ffmpeg_integration
@@ -119,5 +121,47 @@ if(SH264E_BUILD_TESTS)
                 --ffmpeg ${SH264E_FFMPEG}
                 --workdir ${CMAKE_CURRENT_BINARY_DIR}/integration
         )
+    endif()
+
+    if(SH264E_ARM_NONE_EABI_GCC AND SH264E_QEMU_SYSTEM_ARM)
+        set(SH264E_QEMU_SCALER_ELF ${CMAKE_CURRENT_BINARY_DIR}/sh264e_qemu_scaler_smoke.elf)
+        add_custom_command(
+            OUTPUT ${SH264E_QEMU_SCALER_ELF}
+            COMMAND ${SH264E_ARM_NONE_EABI_GCC}
+                -mcpu=cortex-m3
+                -mthumb
+                -O2
+                -ffreestanding
+                -fno-builtin
+                -ffunction-sections
+                -fdata-sections
+                -I${CMAKE_CURRENT_SOURCE_DIR}/include
+                -T${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_cortexm.ld
+                -nostdlib
+                -Wl,--gc-sections
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_scaler_smoke.c
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/sh264e.c
+                -lgcc
+                -o ${SH264E_QEMU_SCALER_ELF}
+            DEPENDS
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_scaler_smoke.c
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_cortexm.ld
+                ${CMAKE_CURRENT_SOURCE_DIR}/include/sh264e.h
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/sh264e.c
+            VERBATIM
+        )
+        add_custom_target(sh264e_qemu_scaler_smoke ALL DEPENDS ${SH264E_QEMU_SCALER_ELF})
+        add_test(
+            NAME sh264e_qemu_scaler_smoke
+            COMMAND ${SH264E_QEMU_SYSTEM_ARM}
+                -M mps2-an385
+                -cpu cortex-m3
+                -kernel ${SH264E_QEMU_SCALER_ELF}
+                -semihosting
+                -nographic
+                -monitor none
+                -serial none
+        )
+        set_tests_properties(sh264e_qemu_scaler_smoke PROPERTIES TIMEOUT 10)
     endif()
 endif()

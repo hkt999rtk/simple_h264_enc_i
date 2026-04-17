@@ -15,6 +15,10 @@ extern "C" {
 #define SH264E_V1_SLICE_LUMA_HEIGHT 16u
 #define SH264E_V1_SLICE_CHROMA_HEIGHT 8u
 #define SH264E_DEFAULT_QP 28
+#define SH264E_RESIZE_MIN_SRC_WIDTH 1280u
+#define SH264E_RESIZE_MAX_SRC_WIDTH 5120u
+#define SH264E_RESIZE_MIN_SRC_HEIGHT 720u
+#define SH264E_RESIZE_MAX_SRC_HEIGHT 2880u
 
 typedef enum sh264e_status_t {
     SH264E_OK = 0,
@@ -88,6 +92,15 @@ sh264e_status_t sh264e_encode_idr(sh264e_encoder_t *encoder,
                                   uint8_t *out,
                                   size_t out_capacity,
                                   size_t *out_size);
+
+sh264e_status_t sh264e_resize_get_slice_buffer_size(const sh264e_frame_t *src_frame,
+                                                    size_t *out_size);
+
+sh264e_status_t sh264e_resize_make_slice(const sh264e_frame_t *src_frame,
+                                         unsigned slice_index,
+                                         uint8_t *work_buffer,
+                                         size_t work_buffer_capacity,
+                                         sh264e_slice_t *out_slice);
 
 const char *sh264e_status_string(sh264e_status_t status);
 

@@ -112,6 +112,23 @@ static void fill_i420(uint8_t *buf)
     memset(buf + y_size + c_size, 128, c_size);
 }
 
+static void fill_i420_sized(uint8_t *buf, uint32_t width, uint32_t height)
+{
+    const size_t y_size = (size_t)width * height;
+    const size_t c_size = (size_t)(width / 2u) * (height / 2u);
+    uint32_t y;
+    uint32_t x;
+
+    for (y = 0; y < height; y++) {
+        uint8_t *row = buf + (size_t)y * width;
+        for (x = 0; x < width; x++) {
+            row[x] = (uint8_t)(((x / 8u) + (y / 6u)) & 0xffu);
+        }
+    }
+    memset(buf + y_size, 96, c_size);
+    memset(buf + y_size + c_size, 176, c_size);
+}
+
 static void make_i420_slice(const uint8_t *input, unsigned slice_index, sh264e_slice_t *slice)
 {
     const size_t y_size = (size_t)SH264E_V1_WIDTH * SH264E_V1_HEIGHT;
@@ -144,6 +161,8 @@ int main(void)
     size_t slice_capacity = 0;
     size_t output_size = 0;
     uint8_t *slice_output = NULL;
+    uint8_t *small_input = NULL;
+    uint8_t *resize_work = NULL;
     int ok = 1;
 
     memset(&config, 0, sizeof(config));
@@ -200,6 +219,85 @@ int main(void)
         return 1;
     }
     fill_i420(input);
+
+    {
+        sh264e_frame_t resize_frame;
+        sh264e_slice_t resized_slice;
+        size_t resize_work_size = 123u;
+        const size_t small_input_size = (size_t)1280u * 720u * 3u / 2u;
+
+        memset(&resize_frame, 0, sizeof(resize_frame));
+        resize_frame.width = SH264E_V1_WIDTH;
+        resize_frame.height = SH264E_V1_HEIGHT;
+        resize_frame.pixfmt = SH264E_PIXFMT_I420;
+        resize_frame.plane[0] = input;
+        resize_frame.plane[1] = input + (size_t)SH264E_V1_WIDTH * SH264E_V1_HEIGHT;
+        resize_frame.plane[2] = resize_frame.plane[1] +
+                                (size_t)(SH264E_V1_WIDTH / 2u) * (SH264E_V1_HEIGHT / 2u);
+        resize_frame.stride[0] = SH264E_V1_WIDTH;
+        resize_frame.stride[1] = SH264E_V1_WIDTH / 2u;
+        resize_frame.stride[2] = SH264E_V1_WIDTH / 2u;
+
+        ok &= expect_status("resize bypass work size",
+                            sh264e_resize_get_slice_buffer_size(&resize_frame, &resize_work_size),
+                            SH264E_OK);
+        if (resize_work_size != 0u) {
+            fprintf(stderr, "1:1 resize should not require work buffer\n");
+            ok = 0;
+        }
+        ok &= expect_status("resize bypass slice",
+                            sh264e_resize_make_slice(&resize_frame, 3u, NULL, 0u, &resized_slice),
+                            SH264E_OK);
+        if (resized_slice.plane[0] != input + (size_t)3u * SH264E_V1_SLICE_LUMA_HEIGHT * SH264E_V1_WIDTH) {
+            fprintf(stderr, "1:1 resize did not bypass luma copy\n");
+            ok = 0;
+        }
+
+        small_input = (uint8_t *)malloc(small_input_size);
+        if (small_input == NULL) {
+            fprintf(stderr, "small resize allocation failed\n");
+            ok = 0;
+        } else {
+            fill_i420_sized(small_input, 1280u, 720u);
+            resize_frame.width = 1280u;
+            resize_frame.height = 720u;
+            resize_frame.plane[0] = small_input;
+            resize_frame.plane[1] = small_input + (size_t)1280u * 720u;
+            resize_frame.plane[2] = resize_frame.plane[1] + (size_t)640u * 360u;
+            resize_frame.stride[0] = 1280u;
+            resize_frame.stride[1] = 640u;
+            resize_frame.stride[2] = 640u;
+
+            ok &= expect_status("resize scaled work size",
+                                sh264e_resize_get_slice_buffer_size(&resize_frame, &resize_work_size),
+                                SH264E_OK);
+            if (resize_work_size == 0u) {
+                fprintf(stderr, "scaled resize should require work buffer\n");
+                ok = 0;
+            }
+            resize_work = (uint8_t *)malloc(resize_work_size);
+            if (resize_work == NULL) {
+                fprintf(stderr, "resize work allocation failed\n");
+                ok = 0;
+            } else {
+                ok &= expect_status("resize scaled slice",
+                                    sh264e_resize_make_slice(&resize_frame, 0u,
+                                                             resize_work, resize_work_size,
+                                                             &resized_slice),
+                                    SH264E_OK);
+                if (resized_slice.plane[0] != resize_work ||
+                    resized_slice.stride[0] != (ptrdiff_t)SH264E_V1_WIDTH ||
+                    resized_slice.stride[1] != (ptrdiff_t)(SH264E_V1_WIDTH / 2u)) {
+                    fprintf(stderr, "scaled resize returned unexpected slice layout\n");
+                    ok = 0;
+                }
+            }
+            resize_frame.width = 1281u;
+            ok &= expect_status("resize odd width",
+                                sh264e_resize_get_slice_buffer_size(&resize_frame, &resize_work_size),
+                                SH264E_ERR_UNSUPPORTED_CONFIG);
+        }
+    }
 
     memset(&frame, 0, sizeof(frame));
     frame.width = SH264E_V1_WIDTH;
@@ -277,5 +375,7 @@ int main(void)
     free(input);
     free(output);
     free(slice_output);
+    free(resize_work);
+    free(small_input);
     return ok ? 0 : 1;
 }

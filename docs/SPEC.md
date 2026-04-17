@@ -89,6 +89,8 @@ Required API entry points:
 * `sh264e_get_max_header_output_size`
 * `sh264e_get_max_slice_output_size`
 * `sh264e_get_max_output_size`
+* `sh264e_resize_get_slice_buffer_size`
+* `sh264e_resize_make_slice`
 
 Required public API concepts:
 
@@ -101,7 +103,7 @@ Required public API concepts:
 
 The output bitstream buffer is provided by the caller. The library reports bytes written or returns a buffer-too-small error.
 
-Progressive slice mode is the preferred v1 library interface. Frame mode (`sh264e_encode_idr`) remains available as a convenience wrapper around progressive mode.
+Progressive slice mode is the preferred v1 library interface. Frame mode (`sh264e_encode_idr`) remains available as a convenience wrapper around progressive mode. The resize API is part of the core library and produces encoder-sized progressive slices from supported YUV420 source frames.
 
 ---
 
@@ -224,17 +226,30 @@ Frame mode may require a full-frame input buffer from the caller, but internally
 
 ---
 
-## 2.4 Bilinear Resize Tool
+## 2.4 Core Bilinear Resize API
 
-The project provides a tool-only bilinear resize + progressive encode pipeline.
+The project provides a core fixed-point bilinear scaler that resizes supported source YUV420 frames into the fixed 2560x1440 encoder target.
 
-This scaler is not part of the encoder library public API in v1. It is intended for validation and pipeline integration.
+The scaler is part of the encoder library public API in v1. It is intended for low-SRAM progressive pipelines and file-based validation tools.
+
+### Library API
+
+```
+sh264e_resize_get_slice_buffer_size
+sh264e_resize_make_slice
+```
+
+`sh264e_resize_get_slice_buffer_size` reports the caller work-buffer size needed by `sh264e_resize_make_slice`.
+
+If the source frame is already **2560x1440**, the required work-buffer size is **0** and `sh264e_resize_make_slice` bypasses scaling by pointing `sh264e_slice_t` directly into the source frame.
 
 ### Tool Command
 
 ```
 sh264e_resize_encode_progressive --format i420|nv12 --src-width W --src-height H input.yuv output.h264
 ```
+
+The tool is only a file I/O wrapper around the library scaler and progressive encoder.
 
 ### Resize Scope
 
@@ -262,11 +277,11 @@ src_pos = (dst_pos + 0.5) * src_size / dst_size - 0.5
 
 Source sample indices are clamped at image boundaries.
 
-The resize tool implementation should use fixed-point integer arithmetic for coordinate mapping and bilinear interpolation.
+The library scaler implementation must use fixed-point integer arithmetic for coordinate mapping and bilinear interpolation. The inner pixel loops should avoid division so the path remains suitable for ARM Cortex-M class CPUs.
 
 ### Progressive Encoder Integration
 
-The tool may read a full source frame for file-based validation, but the resized output side is progressive.
+Tools may read a full source frame for file-based validation, but the library resize output side is progressive.
 
 For each encoder slice, the scaler produces:
 
@@ -498,7 +513,18 @@ Validate:
 
 ---
 
-### 9.4 Visual Check
+### 9.4 Resize API Test
+
+Validate:
+
+* 1:1 resize reports zero work-buffer bytes and bypasses copy
+* Scaled resize reports non-zero work-buffer bytes and emits encoder-sized slices
+* Invalid resize dimensions fail
+* Cortex-M QEMU scaler smoke test passes when the ARM bare-metal toolchain and QEMU are available
+
+---
+
+### 9.5 Visual Check
 
 * Confirm:
 
