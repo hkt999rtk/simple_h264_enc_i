@@ -78,6 +78,28 @@ color spaces, non-power-of-two sampling, and non-interleaved multi-scan JPEGs.
 Restart markers must continue to reset DC predictors and bitstream state at the
 same MCU intervals as the current full-plane decode path.
 
+## MCU-Row Decoder Contract
+
+The internal `njDecodeMcuRows` contract is intentionally narrower than the full
+component-plane decoder:
+
+* Supported inputs are baseline sequential JPEGs with either one grayscale
+  component or three interleaved YCbCr components.
+* Component sampling factors must be nonzero powers of two, matching the
+  existing NanoJPEG component-plane validation.
+* The decoder emits callbacks in raster MCU-row order after a complete MCU row
+  has been decoded into the temporary component row buffers.
+* Restart markers keep the existing NanoJPEG behavior: bitstream state is byte
+  aligned, marker order is checked, and component DC predictors are reset at the
+  configured interval.
+* Unsupported SOF markers, arithmetic/Huffman table modes outside the baseline
+  scope, non-interleaved scan layouts, CMYK/other component counts, and
+  malformed marker lengths return deterministic NanoJPEG error codes before a
+  production caller writes output.
+* A nonzero callback return stops decoding with `NJ_CALLBACK_ABORT`; integration
+  code maps its own callback-side status separately so callers receive the
+  original library status when slice encoding or arena checks fail.
+
 ## Proposed Internal Shape
 
 Add an internal decode mode that owns the JPEG bitstream state and emits decoded
