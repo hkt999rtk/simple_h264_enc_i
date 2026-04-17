@@ -27,6 +27,74 @@ static int next_nal_type(const uint8_t *data, size_t size, size_t *offset, unsig
     return 0;
 }
 
+static int expect_no_more_nals(const uint8_t *data, size_t size, size_t offset)
+{
+    unsigned type = 0;
+    return !next_nal_type(data, size, &offset, &type);
+}
+
+static int expect_wrapper_nal_sequence(const uint8_t *data, size_t size)
+{
+    size_t offset = 0;
+    unsigned type = 0;
+    unsigned i;
+
+    if (!next_nal_type(data, size, &offset, &type) || type != 7u) {
+        fprintf(stderr, "missing SPS NALU\n");
+        return 0;
+    }
+    if (!next_nal_type(data, size, &offset, &type) || type != 8u) {
+        fprintf(stderr, "missing PPS NALU\n");
+        return 0;
+    }
+    for (i = 0; i < SH264E_V1_SLICE_COUNT; i++) {
+        if (!next_nal_type(data, size, &offset, &type) || type != 5u) {
+            fprintf(stderr, "missing IDR slice NALU %u\n", i);
+            return 0;
+        }
+    }
+    if (!expect_no_more_nals(data, size, offset)) {
+        fprintf(stderr, "unexpected extra NALU after progressive IDR slices\n");
+        return 0;
+    }
+    return 1;
+}
+
+static int expect_header_nal_sequence(const uint8_t *data, size_t size)
+{
+    size_t offset = 0;
+    unsigned type = 0;
+
+    if (!next_nal_type(data, size, &offset, &type) || type != 7u) {
+        fprintf(stderr, "missing SPS NALU\n");
+        return 0;
+    }
+    if (!next_nal_type(data, size, &offset, &type) || type != 8u) {
+        fprintf(stderr, "missing PPS NALU\n");
+        return 0;
+    }
+    if (!expect_no_more_nals(data, size, offset)) {
+        fprintf(stderr, "unexpected extra NALU after SPS/PPS\n");
+        return 0;
+    }
+    return 1;
+}
+
+static int expect_single_nal_type(const uint8_t *data, size_t size, unsigned expected_type)
+{
+    size_t offset = 0;
+    unsigned type = 0;
+    if (!next_nal_type(data, size, &offset, &type) || type != expected_type) {
+        fprintf(stderr, "expected NALU type %u\n", expected_type);
+        return 0;
+    }
+    if (!expect_no_more_nals(data, size, offset)) {
+        fprintf(stderr, "unexpected extra NALU\n");
+        return 0;
+    }
+    return 1;
+}
+
 static void fill_i420(uint8_t *buf)
 {
     const size_t y_size = (size_t)SH264E_V1_WIDTH * SH264E_V1_HEIGHT;
@@ -44,6 +112,23 @@ static void fill_i420(uint8_t *buf)
     memset(buf + y_size + c_size, 128, c_size);
 }
 
+static void make_i420_slice(const uint8_t *input, unsigned slice_index, sh264e_slice_t *slice)
+{
+    const size_t y_size = (size_t)SH264E_V1_WIDTH * SH264E_V1_HEIGHT;
+    const size_t c_size = (size_t)(SH264E_V1_WIDTH / 2u) * (SH264E_V1_HEIGHT / 2u);
+    const uint8_t *u = input + y_size;
+    const uint8_t *v = u + c_size;
+
+    memset(slice, 0, sizeof(*slice));
+    slice->pixfmt = SH264E_PIXFMT_I420;
+    slice->plane[0] = input + (size_t)slice_index * SH264E_V1_SLICE_LUMA_HEIGHT * SH264E_V1_WIDTH;
+    slice->plane[1] = u + (size_t)slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT * (SH264E_V1_WIDTH / 2u);
+    slice->plane[2] = v + (size_t)slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT * (SH264E_V1_WIDTH / 2u);
+    slice->stride[0] = SH264E_V1_WIDTH;
+    slice->stride[1] = SH264E_V1_WIDTH / 2u;
+    slice->stride[2] = SH264E_V1_WIDTH / 2u;
+}
+
 int main(void)
 {
     sh264e_config_t config;
@@ -55,9 +140,10 @@ int main(void)
     uint8_t *output = NULL;
     size_t input_size;
     size_t output_capacity = 0;
+    size_t header_capacity = 0;
+    size_t slice_capacity = 0;
     size_t output_size = 0;
-    size_t offset = 0;
-    unsigned type = 0;
+    uint8_t *slice_output = NULL;
     int ok = 1;
 
     memset(&config, 0, sizeof(config));
@@ -79,8 +165,18 @@ int main(void)
     ok &= expect_status("max output size",
                         sh264e_get_max_output_size(&config, &output_capacity),
                         SH264E_OK);
+    ok &= expect_status("max header output size",
+                        sh264e_get_max_header_output_size(&config, &header_capacity),
+                        SH264E_OK);
+    ok &= expect_status("max slice output size",
+                        sh264e_get_max_slice_output_size(&config, &slice_capacity),
+                        SH264E_OK);
     if (output_capacity == 0u) {
         fprintf(stderr, "max output size returned zero\n");
+        ok = 0;
+    }
+    if (header_capacity == 0u || slice_capacity == 0u) {
+        fprintf(stderr, "progressive max output size returned zero\n");
         ok = 0;
     }
 
@@ -94,11 +190,13 @@ int main(void)
     input_size = (size_t)SH264E_V1_WIDTH * SH264E_V1_HEIGHT * 3u / 2u;
     input = (uint8_t *)malloc(input_size);
     output = (uint8_t *)malloc(output_capacity);
-    if (input == NULL || output == NULL) {
+    slice_output = (uint8_t *)malloc(slice_capacity);
+    if (input == NULL || output == NULL || slice_output == NULL) {
         fprintf(stderr, "allocation failed\n");
         sh264e_encoder_destroy(encoder);
         free(input);
         free(output);
+        free(slice_output);
         return 1;
     }
     fill_i420(input);
@@ -126,15 +224,58 @@ int main(void)
         ok = 0;
     }
 
-    ok &= next_nal_type(output, output_size, &offset, &type) && type == 7u;
-    ok &= next_nal_type(output, output_size, &offset, &type) && type == 8u;
-    ok &= next_nal_type(output, output_size, &offset, &type) && type == 5u;
-    if (!ok) {
-        fprintf(stderr, "unexpected Annex B NALU sequence\n");
+    if (!expect_wrapper_nal_sequence(output, output_size)) {
+        ok = 0;
+    }
+
+    {
+        sh264e_slice_t slice;
+        unsigned i;
+
+        make_i420_slice(input, 0u, &slice);
+        ok &= expect_status("slice before begin",
+                            sh264e_encode_idr_slice(encoder, &slice, slice_output, slice_capacity, &output_size),
+                            SH264E_ERR_BAD_STATE);
+
+        ok &= expect_status("begin idr",
+                            sh264e_begin_idr(encoder, output, header_capacity, &output_size),
+                            SH264E_OK);
+        if (!expect_header_nal_sequence(output, output_size)) {
+            fprintf(stderr, "begin should emit SPS/PPS only\n");
+            ok = 0;
+        }
+        ok &= expect_status("begin twice",
+                            sh264e_begin_idr(encoder, output, header_capacity, &output_size),
+                            SH264E_ERR_BAD_STATE);
+        ok &= expect_status("end before complete",
+                            sh264e_end_idr(encoder),
+                            SH264E_ERR_INCOMPLETE_FRAME);
+
+        for (i = 0; i < SH264E_V1_SLICE_COUNT; i++) {
+            make_i420_slice(input, i, &slice);
+            ok &= expect_status("encode progressive slice",
+                                sh264e_encode_idr_slice(encoder, &slice, slice_output, slice_capacity, &output_size),
+                                SH264E_OK);
+            if (!expect_single_nal_type(slice_output, output_size, 5u)) {
+                ok = 0;
+            }
+        }
+
+        make_i420_slice(input, SH264E_V1_SLICE_COUNT - 1u, &slice);
+        ok &= expect_status("91st slice",
+                            sh264e_encode_idr_slice(encoder, &slice, slice_output, slice_capacity, &output_size),
+                            SH264E_ERR_FRAME_COMPLETE);
+        ok &= expect_status("end complete",
+                            sh264e_end_idr(encoder),
+                            SH264E_OK);
+        ok &= expect_status("end idle",
+                            sh264e_end_idr(encoder),
+                            SH264E_ERR_BAD_STATE);
     }
 
     sh264e_encoder_destroy(encoder);
     free(input);
     free(output);
+    free(slice_output);
     return ok ? 0 : 1;
 }

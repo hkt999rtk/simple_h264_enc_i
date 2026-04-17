@@ -10,6 +10,9 @@ The design goal is:
 * JPEG-like processing model
 * Guaranteed decodability by standard H.264 decoders
 * Implemented as a reusable C library with test/application I/O kept separate
+* Prefer progressive slice input to reduce SRAM footprint and input bandwidth
+* Process one horizontal macroblock row per progressive encode call
+* Avoid full-frame reconstructed buffering in progressive mode
 
 Target use cases:
 
@@ -79,7 +82,12 @@ Required API entry points:
 
 * `sh264e_encoder_create`
 * `sh264e_encoder_destroy`
+* `sh264e_begin_idr`
+* `sh264e_encode_idr_slice`
+* `sh264e_end_idr`
 * `sh264e_encode_idr`
+* `sh264e_get_max_header_output_size`
+* `sh264e_get_max_slice_output_size`
 * `sh264e_get_max_output_size`
 
 Required public API concepts:
@@ -87,10 +95,13 @@ Required public API concepts:
 * `sh264e_status_t` — success and error codes
 * `sh264e_pixfmt_t` — supported input formats (`I420`, `NV12`)
 * `sh264e_config_t` — encoder configuration
+* `sh264e_slice_t` — caller-provided progressive slice buffers
 * `sh264e_frame_t` — caller-provided input frame buffers
 * `sh264e_encoder_t` — opaque encoder handle
 
 The output bitstream buffer is provided by the caller. The library reports bytes written or returns a buffer-too-small error.
+
+Progressive slice mode is the preferred v1 library interface. Frame mode (`sh264e_encode_idr`) remains available as a convenience wrapper around progressive mode.
 
 ---
 
@@ -113,20 +124,110 @@ The output bitstream buffer is provided by the caller. The library reports bytes
 * Bitstream format:
 
   * Annex B (start code: `0x000001`)
-* Output structure:
+* Frame-mode output structure:
 
   ```
   SPS
   PPS
-  IDR Slice
+  IDR Slice[0]
+  ...
+  IDR Slice[89]
   ```
+
+---
+
+## 2.3 Progressive Slice Mode
+
+Progressive slice mode is intended to reduce SRAM footprint and input bandwidth pressure.
+
+Instead of requiring a full-frame input buffer and full-frame reconstructed buffer, the caller provides one horizontal macroblock-row slice at a time.
+
+### Slice Unit
+
+* Fixed v1 slice height: **one macroblock row**
+* Luma input per call: **2560 x 16**
+* Chroma input per call:
+
+  * I420: U = **1280 x 8**, V = **1280 x 8**
+  * NV12: UV = **2560 x 8**
+
+### Required Call Sequence
+
+The caller must encode one IDR frame using this sequence:
+
+```
+sh264e_begin_idr
+sh264e_encode_idr_slice  // slice 0
+sh264e_encode_idr_slice  // slice 1
+...
+sh264e_encode_idr_slice  // slice 89
+sh264e_end_idr
+```
+
+Exactly **90** slice calls are required for a 2560x1440 frame.
+
+### Progressive Output Structure
+
+```
+SPS
+PPS
+IDR Slice[0]
+IDR Slice[1]
+...
+IDR Slice[89]
+```
+
+`sh264e_begin_idr` emits SPS/PPS. Each `sh264e_encode_idr_slice` call emits one complete IDR slice NALU. `sh264e_end_idr` emits no bitstream in v1; it validates that exactly 90 slices were submitted and resets the progressive frame state.
+
+### Slice Indexing
+
+The encoder owns the progressive slice index.
+
+* Caller must submit slices in top-to-bottom raster order
+* Caller does not pass a slice index
+* `first_mb_in_slice = slice_index * 160`
+* A 91st slice call must fail
+* Calling slice encode before `sh264e_begin_idr` must fail
+* Calling `sh264e_end_idr` before all 90 slices are encoded must fail
+
+### Slice Buffer Layout
+
+`sh264e_slice_t` points to the beginning of the current slice.
+
+For I420:
+
+* `plane[0]` = Y slice start
+* `plane[1]` = U slice start
+* `plane[2]` = V slice start
+* `stride[0] >= 2560`
+* `stride[1] >= 1280`
+* `stride[2] >= 1280`
+
+For NV12:
+
+* `plane[0]` = Y slice start
+* `plane[1]` = interleaved UV slice start
+* `plane[2]` is unused
+* `stride[0] >= 2560`
+* `stride[1] >= 2560`
+
+### Frame Mode Compatibility
+
+`sh264e_frame_t` and `sh264e_encode_idr` remain available for convenience.
+
+Frame mode may require a full-frame input buffer from the caller, but internally it should be implemented as a wrapper around progressive mode:
+
+* Call `sh264e_begin_idr`
+* Offset full-frame plane pointers by macroblock row
+* Call `sh264e_encode_idr_slice` 90 times
+* Call `sh264e_end_idr`
 
 ---
 
 ## 3. Encoder Pipeline
 
 ```
-Input YUV
+Input YUV Slice
    ↓
 Macroblock Partition (16x16)
    ↓
@@ -172,6 +273,11 @@ NALU Packaging
 * If unavailable (top/left boundary):
 
   * Use constant value (e.g. 128)
+* Progressive slice boundaries are real H.264 slice boundaries:
+
+  * Intra prediction must not cross from a previous slice row
+  * Left prediction inside the current slice is allowed
+  * Top prediction is available only within the same slice when applicable
 
 ---
 
@@ -216,6 +322,8 @@ NALU Packaging
 * SPS (nal_unit_type = 7)
 * PPS (nal_unit_type = 8)
 * IDR Slice (nal_unit_type = 5)
+
+Progressive mode emits one IDR slice NALU per macroblock row.
 
 #### Constraints:
 
@@ -266,7 +374,13 @@ The generated bitstream must:
   * Up to **3 seconds per frame is acceptable**
 * Memory:
 
-  * Must support full frame buffering (2560x1440 YUV)
+  * Frame wrapper may require full-frame input buffering by the caller
+  * Progressive mode must not require full-frame input buffering
+  * Progressive internal reconstructed storage should be limited to slice-local state:
+
+    * Luma: `2560 * 16`
+    * Chroma U: `1280 * 8`
+    * Chroma V: `1280 * 8`
 
 ---
 
@@ -287,6 +401,15 @@ The generated bitstream must:
 ### 9.1 Functional Test
 
 * Encode 1 frame → output `.h264`
+* Verify output structure:
+
+  ```
+  SPS
+  PPS
+  IDR Slice[0]
+  ...
+  IDR Slice[89]
+  ```
 * Verify:
 
   ```
@@ -301,10 +424,22 @@ The generated bitstream must:
 
   * SPS/PPS correctness
   * Slice header correctness
+  * Exactly 90 IDR slice NALUs for one 2560x1440 progressive frame
+  * `first_mb_in_slice = slice_index * 160`
+
+### 9.3 Progressive API Sequence Test
+
+Validate:
+
+* Slice before `sh264e_begin_idr` fails
+* Calling `sh264e_begin_idr` twice fails
+* Calling `sh264e_end_idr` before 90 slices fails
+* 91st slice call fails
+* Complete `begin -> 90 slices -> end` sequence succeeds
 
 ---
 
-### 9.3 Visual Check
+### 9.4 Visual Check
 
 * Confirm:
 

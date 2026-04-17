@@ -6,11 +6,12 @@ This project is intentionally small and narrow in scope:
 
 * C static library built with CMake
 * Single-frame IDR-only H.264 output
-* Annex B bitstream output: SPS, PPS, IDR slice
+* Annex B bitstream output: SPS, PPS, 90 IDR slices
 * Fixed v1 resolution: 2560x1440
 * 8-bit YUV420 input: I420 or NV12
 * Baseline / Constrained Baseline compatible CAVLC bitstream
 * No file I/O inside the encoder library
+* Progressive slice API for lower SRAM footprint and input bandwidth
 
 The encoder is designed for validation and offline experiments, not compression efficiency.
 
@@ -87,14 +88,44 @@ Library code must not call:
 
 The public API is declared in `include/sh264e.h`.
 
-Main entry points:
+Progressive entry points:
 
 * `sh264e_encoder_create`
 * `sh264e_encoder_destroy`
+* `sh264e_begin_idr`
+* `sh264e_encode_idr_slice`
+* `sh264e_end_idr`
+* `sh264e_get_max_header_output_size`
+* `sh264e_get_max_slice_output_size`
+
+Frame-mode convenience entry points:
+
 * `sh264e_get_max_output_size`
 * `sh264e_encode_idr`
 
 The output bitstream buffer is owned by the caller.
+
+## Progressive Mode
+
+Progressive mode is the preferred v1 interface.
+
+Each `sh264e_encode_idr_slice` call consumes one horizontal macroblock row:
+
+* Y: `2560 x 16`
+* I420 U/V: `1280 x 8` each
+* NV12 UV: `2560 x 8`
+
+The required sequence for one frame is:
+
+```text
+sh264e_begin_idr
+90x sh264e_encode_idr_slice
+sh264e_end_idr
+```
+
+`sh264e_begin_idr` emits SPS/PPS. Each slice call emits one IDR slice NALU. `sh264e_end_idr` validates completion and emits no bytes in v1.
+
+The legacy frame API remains available and internally offsets full-frame planes into 90 progressive slice calls.
 
 ## Current Limits
 

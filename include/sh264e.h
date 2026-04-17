@@ -10,6 +10,10 @@ extern "C" {
 
 #define SH264E_V1_WIDTH 2560u
 #define SH264E_V1_HEIGHT 1440u
+#define SH264E_V1_MB_WIDTH 160u
+#define SH264E_V1_SLICE_COUNT 90u
+#define SH264E_V1_SLICE_LUMA_HEIGHT 16u
+#define SH264E_V1_SLICE_CHROMA_HEIGHT 8u
 #define SH264E_DEFAULT_QP 28
 
 typedef enum sh264e_status_t {
@@ -18,7 +22,10 @@ typedef enum sh264e_status_t {
     SH264E_ERR_UNSUPPORTED_CONFIG = -2,
     SH264E_ERR_BUFFER_TOO_SMALL = -3,
     SH264E_ERR_ALLOCATION_FAILED = -4,
-    SH264E_ERR_INTERNAL = -5
+    SH264E_ERR_INTERNAL = -5,
+    SH264E_ERR_BAD_STATE = -6,
+    SH264E_ERR_INCOMPLETE_FRAME = -7,
+    SH264E_ERR_FRAME_COMPLETE = -8
 } sh264e_status_t;
 
 typedef enum sh264e_pixfmt_t {
@@ -41,6 +48,12 @@ typedef struct sh264e_frame_t {
     ptrdiff_t stride[3];
 } sh264e_frame_t;
 
+typedef struct sh264e_slice_t {
+    sh264e_pixfmt_t pixfmt;
+    const uint8_t *plane[3];
+    ptrdiff_t stride[3];
+} sh264e_slice_t;
+
 typedef struct sh264e_encoder_t sh264e_encoder_t;
 
 sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,
@@ -48,8 +61,27 @@ sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,
 
 void sh264e_encoder_destroy(sh264e_encoder_t *encoder);
 
+sh264e_status_t sh264e_get_max_header_output_size(const sh264e_config_t *config,
+                                                  size_t *out_size);
+
+sh264e_status_t sh264e_get_max_slice_output_size(const sh264e_config_t *config,
+                                                 size_t *out_size);
+
 sh264e_status_t sh264e_get_max_output_size(const sh264e_config_t *config,
                                            size_t *out_size);
+
+sh264e_status_t sh264e_begin_idr(sh264e_encoder_t *encoder,
+                                 uint8_t *out,
+                                 size_t out_capacity,
+                                 size_t *out_size);
+
+sh264e_status_t sh264e_encode_idr_slice(sh264e_encoder_t *encoder,
+                                        const sh264e_slice_t *slice,
+                                        uint8_t *out,
+                                        size_t out_capacity,
+                                        size_t *out_size);
+
+sh264e_status_t sh264e_end_idr(sh264e_encoder_t *encoder);
 
 sh264e_status_t sh264e_encode_idr(sh264e_encoder_t *encoder,
                                   const sh264e_frame_t *frame,
