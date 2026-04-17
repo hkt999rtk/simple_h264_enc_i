@@ -19,7 +19,7 @@ static void usage(const char *argv0)
 {
     fprintf(stderr,
             "usage: %s [--streaming-prototype] [--test-allocation-limit BYTES] "
-            "[--test-arena-shrink BYTES] "
+            "[--test-arena-shrink BYTES] [--test-arena-offset BYTES] "
             "--format i420|nv12 input.jpg output.h264\n",
             argv0);
 }
@@ -110,6 +110,7 @@ int main(int argc, char **argv)
     sh264e_encoder_t *encoder = NULL;
     sh264e_status_t status;
     uint8_t *jpeg_data = NULL;
+    uint8_t *jpeg_arena_alloc = NULL;
     uint8_t *jpeg_arena = NULL;
     uint8_t *work = NULL;
     uint8_t *output_buf = NULL;
@@ -122,6 +123,7 @@ int main(int argc, char **argv)
     size_t output_size = 0;
     size_t allocation_limit = (size_t)-1;
     size_t arena_shrink = 0;
+    size_t arena_offset = 0;
     int streaming_prototype = 0;
     int argi = 1;
     int rc = 1;
@@ -138,6 +140,12 @@ int main(int argc, char **argv)
             argi += 2;
         } else if (argi + 1 < argc && strcmp(argv[argi], "--test-arena-shrink") == 0) {
             if (!parse_size(argv[argi + 1], &arena_shrink)) {
+                usage(argv[0]);
+                return 2;
+            }
+            argi += 2;
+        } else if (argi + 1 < argc && strcmp(argv[argi], "--test-arena-offset") == 0) {
+            if (!parse_size(argv[argi + 1], &arena_offset)) {
                 usage(argv[0]);
                 return 2;
             }
@@ -159,7 +167,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "failed to read JPEG input: %s\n", input_path);
         goto done;
     }
-    if (streaming_prototype && (allocation_limit != (size_t)-1 || arena_shrink != 0u)) {
+    if (streaming_prototype &&
+        (allocation_limit != (size_t)-1 || arena_shrink != 0u || arena_offset != 0u)) {
         fprintf(stderr, "--streaming-prototype cannot be combined with allocation test options\n");
         goto done;
     }
@@ -175,8 +184,8 @@ int main(int argc, char **argv)
         } else {
             jpeg_arena_size -= arena_shrink;
         }
-    } else if (arena_shrink != 0u) {
-        fprintf(stderr, "--test-arena-shrink cannot be combined with --test-allocation-limit\n");
+    } else if (arena_shrink != 0u || arena_offset != 0u) {
+        fprintf(stderr, "arena test options cannot be combined with --test-allocation-limit\n");
         goto done;
     }
 
@@ -198,11 +207,19 @@ int main(int argc, char **argv)
     }
 
     if (allocation_limit == (size_t)-1 && !streaming_prototype) {
-        jpeg_arena = (uint8_t *)malloc(jpeg_arena_size);
-        if (jpeg_arena == NULL) {
+        size_t jpeg_arena_alloc_size = jpeg_arena_size;
+
+        if (arena_offset > ((size_t)-1) - jpeg_arena_alloc_size) {
+            fprintf(stderr, "JPEG arena allocation size overflow\n");
+            goto done;
+        }
+        jpeg_arena_alloc_size += arena_offset;
+        jpeg_arena_alloc = (uint8_t *)malloc(jpeg_arena_alloc_size);
+        if (jpeg_arena_alloc == NULL) {
             fprintf(stderr, "failed to allocate JPEG arena\n");
             goto done;
         }
+        jpeg_arena = jpeg_arena_alloc + arena_offset;
     }
     work = (uint8_t *)malloc(work_size);
     output_buf = (uint8_t *)malloc(output_capacity);
@@ -272,7 +289,7 @@ done:
     sh264e_encoder_destroy(encoder);
     free(output_buf);
     free(work);
-    free(jpeg_arena);
+    free(jpeg_arena_alloc);
     free(jpeg_data);
     return rc;
 }

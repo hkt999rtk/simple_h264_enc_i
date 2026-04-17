@@ -238,7 +238,8 @@ void *njAllocMem(int size)
     size_t span = 0u;
     size_t aligned_offset = 0u;
     size_t end_offset = 0u;
-    sh264e_jpeg_alloc_header_t *header;
+    sh264e_jpeg_alloc_header_t header;
+    uint8_t *header_bytes;
     void *raw;
 
     if (!jpeg_allocation_span(requested, &span)) {
@@ -253,8 +254,11 @@ void *njAllocMem(int size)
             return NULL;
         }
     }
-    if (!jpeg_align_up(sh264e_jpeg_alloc_arena_offset, &aligned_offset) ||
-        aligned_offset > ((size_t)-1) - span) {
+    if (!jpeg_align_up(sh264e_jpeg_alloc_arena_offset, &aligned_offset)) {
+        sh264e_jpeg_alloc_arena_failed = 1u;
+        return NULL;
+    }
+    if (aligned_offset > ((size_t)-1) - span) {
         sh264e_jpeg_alloc_arena_failed = 1u;
         return NULL;
     }
@@ -266,10 +270,12 @@ void *njAllocMem(int size)
             return NULL;
         }
 
-        header = (sh264e_jpeg_alloc_header_t *)(void *)(sh264e_jpeg_alloc_arena + aligned_offset);
-        header->size = requested;
-        header->arena_span = span;
-        header->from_arena = 1u;
+        header.size = requested;
+        header.arena_span = span;
+        header.from_arena = 1u;
+        header_bytes = sh264e_jpeg_alloc_arena + aligned_offset;
+        /* Caller arenas are byte buffers; do not require the arena base itself to be aligned. */
+        memcpy(header_bytes, &header, sizeof(header));
         raw = sh264e_jpeg_alloc_arena + aligned_offset + header_size;
         sh264e_jpeg_alloc_arena_offset = end_offset;
     } else {
@@ -278,10 +284,11 @@ void *njAllocMem(int size)
             return NULL;
         }
 
-        header = (sh264e_jpeg_alloc_header_t *)raw;
-        header->size = requested;
-        header->arena_span = span;
-        header->from_arena = 0u;
+        header.size = requested;
+        header.arena_span = span;
+        header.from_arena = 0u;
+        header_bytes = (uint8_t *)raw;
+        memcpy(header_bytes, &header, sizeof(header));
         raw = (uint8_t *)raw + header_size;
         sh264e_jpeg_alloc_arena_offset = end_offset;
     }
@@ -299,20 +306,22 @@ void *njAllocMem(int size)
 
 void njFreeMem(void *block)
 {
-    sh264e_jpeg_alloc_header_t *header;
+    uint8_t *header_bytes;
+    sh264e_jpeg_alloc_header_t header;
 
     if (block == NULL) {
         return;
     }
 
-    header = (sh264e_jpeg_alloc_header_t *)(void *)((uint8_t *)block - jpeg_alloc_header_size());
-    if (sh264e_jpeg_alloc_current_bytes >= header->size) {
-        sh264e_jpeg_alloc_current_bytes -= header->size;
+    header_bytes = (uint8_t *)block - jpeg_alloc_header_size();
+    memcpy(&header, header_bytes, sizeof(header));
+    if (sh264e_jpeg_alloc_current_bytes >= header.size) {
+        sh264e_jpeg_alloc_current_bytes -= header.size;
     } else {
         sh264e_jpeg_alloc_current_bytes = 0u;
     }
-    if (header->from_arena == 0u) {
-        free(header);
+    if (header.from_arena == 0u) {
+        free(header_bytes);
     }
 }
 

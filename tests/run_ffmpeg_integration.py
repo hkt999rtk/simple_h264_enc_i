@@ -250,8 +250,12 @@ def validate_jpeg_restart_markers(path):
         raise RuntimeError(f"{path} is missing JPEG RST markers")
 
 
-def encode_jpeg(args, fmt, jpeg_input, bitstream):
-    result = run_capture([args.jpeg_encoder, "--format", fmt, str(jpeg_input), str(bitstream)])
+def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None):
+    command = [args.jpeg_encoder]
+    if extra_args:
+        command.extend(extra_args)
+    command.extend(["--format", fmt, str(jpeg_input), str(bitstream)])
+    result = run_capture(command)
     if "jpeg current allocation bytes: 0" not in result.stdout:
         raise RuntimeError(f"JPEG encoder did not release tracked allocations: {result.stdout!r}")
     if "jpeg work arena bytes:" not in result.stdout:
@@ -381,6 +385,10 @@ def main():
                 str(jpeg_input),
                 str(workdir / "output_jpeg_arena_too_small.h264"),
             ], stderr_contains="buffer too small")
+            offset_arena_output = workdir / "output_jpeg_arena_offset_i420.h264"
+            encode_jpeg(args, "i420", jpeg_input, offset_arena_output,
+                        ["--test-arena-offset", "1"])
+            validate_bitstream(args.ffprobe, args.ffmpeg, offset_arena_output)
         streaming_output = workdir / f"output_jpeg_streaming_{pix_fmt}_i420.h264"
         encode_jpeg_streaming_prototype(args, jpeg_input, streaming_output)
         validate_bitstream(args.ffprobe, args.ffmpeg, streaming_output)
