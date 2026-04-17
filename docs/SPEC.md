@@ -224,6 +224,63 @@ Frame mode may require a full-frame input buffer from the caller, but internally
 
 ---
 
+## 2.4 Bilinear Resize Tool
+
+The project provides a tool-only bilinear resize + progressive encode pipeline.
+
+This scaler is not part of the encoder library public API in v1. It is intended for validation and pipeline integration.
+
+### Tool Command
+
+```
+sh264e_resize_encode_progressive --format i420|nv12 --src-width W --src-height H input.yuv output.h264
+```
+
+### Resize Scope
+
+* Source format: **YUV420 (I420 or NV12)**
+* Source dimensions:
+
+  * Width must be even
+  * Height must be even
+  * Valid width range: **1280..5120**
+  * Valid height range: **720..2880**
+* Destination dimensions:
+
+  * Fixed output width: **2560**
+  * Fixed output height: **1440**
+
+The validated source range enforces the recommended bilinear scale range of approximately **0.5x..2.0x** per axis.
+
+### Scaling Rule
+
+Use half-pixel bilinear mapping:
+
+```
+src_pos = (dst_pos + 0.5) * src_size / dst_size - 0.5
+```
+
+Source sample indices are clamped at image boundaries.
+
+### Progressive Encoder Integration
+
+The tool may read a full source frame for file-based validation, but the resized output side is progressive.
+
+For each encoder slice, the scaler produces:
+
+* Y output: **2560 x 16**
+* I420 chroma output:
+
+  * U: **1280 x 8**
+  * V: **1280 x 8**
+* NV12 chroma output:
+
+  * UV: **2560 x 8**
+
+Each scaled output slice is passed directly to `sh264e_encode_idr_slice`.
+
+---
+
 ## 3. Encoder Pipeline
 
 ```

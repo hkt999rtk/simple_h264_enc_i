@@ -5,10 +5,18 @@ from pathlib import Path
 
 WIDTH = 2560
 HEIGHT = 1440
+SMALL_WIDTH = 1280
+SMALL_HEIGHT = 720
 
 
 def run(cmd):
     subprocess.run(cmd, check=True)
+
+
+def run_expect_fail(cmd):
+    result = subprocess.run(cmd)
+    if result.returncode == 0:
+        raise RuntimeError(f"expected command to fail: {cmd}")
 
 
 def make_i420(path):
@@ -35,6 +43,34 @@ def make_nv12(path):
             for x in range(WIDTH // 2):
                 row.append((96 + (x // 24) % 32) & 0xFF)
                 row.append((176 + (y // 20) % 48) & 0xFF)
+            f.write(row)
+    assert path.stat().st_size == y_size + uv_size
+
+
+def make_i420_sized(path, width, height):
+    y_size = width * height
+    c_size = (width // 2) * (height // 2)
+    with path.open("wb") as f:
+        for y in range(height):
+            f.write(bytes(((x // 6 + y // 5) & 0xFF) for x in range(width)))
+        for y in range(height // 2):
+            f.write(bytes((72 + (x // 16 + y // 18) % 72) & 0xFF for x in range(width // 2)))
+        for y in range(height // 2):
+            f.write(bytes((176 + (x // 20 + y // 14) % 56) & 0xFF for x in range(width // 2)))
+    assert path.stat().st_size == y_size + 2 * c_size
+
+
+def make_nv12_sized(path, width, height):
+    y_size = width * height
+    uv_size = width * (height // 2)
+    with path.open("wb") as f:
+        for y in range(height):
+            f.write(bytes(((x // 7 + y // 4) & 0xFF) for x in range(width)))
+        for y in range(height // 2):
+            row = bytearray()
+            for x in range(width // 2):
+                row.append((88 + (x // 12 + y // 15) % 64) & 0xFF)
+                row.append((168 + (x // 18 + y // 10) % 64) & 0xFF)
             f.write(row)
     assert path.stat().st_size == y_size + uv_size
 
@@ -81,6 +117,8 @@ def run_case(args, fmt, make_input):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--encoder", required=True)
+    parser.add_argument("--progressive-encoder", required=True)
+    parser.add_argument("--resize-encoder", required=True)
     parser.add_argument("--ffprobe", required=True)
     parser.add_argument("--ffmpeg", required=True)
     parser.add_argument("--workdir", required=True)
@@ -90,6 +128,69 @@ def main():
     workdir.mkdir(parents=True, exist_ok=True)
     run_case(args, "i420", make_i420)
     run_case(args, "nv12", make_nv12)
+
+    progressive_i420 = workdir / "output_i420_progressive.h264"
+    run([args.progressive_encoder, "--format", "i420", str(workdir / "input_i420.yuv"), str(progressive_i420)])
+    validate_bitstream(args.ffprobe, args.ffmpeg, progressive_i420)
+
+    progressive_nv12 = workdir / "output_nv12_progressive.h264"
+    run([args.progressive_encoder, "--format", "nv12", str(workdir / "input_nv12.yuv"), str(progressive_nv12)])
+    validate_bitstream(args.ffprobe, args.ffmpeg, progressive_nv12)
+
+    small_i420 = workdir / "input_i420_720p.yuv"
+    make_i420_sized(small_i420, SMALL_WIDTH, SMALL_HEIGHT)
+    resized_i420 = workdir / "output_i420_resize_progressive.h264"
+    run([
+        args.resize_encoder,
+        "--format",
+        "i420",
+        "--src-width",
+        str(SMALL_WIDTH),
+        "--src-height",
+        str(SMALL_HEIGHT),
+        str(small_i420),
+        str(resized_i420),
+    ])
+    validate_bitstream(args.ffprobe, args.ffmpeg, resized_i420)
+
+    small_nv12 = workdir / "input_nv12_720p.yuv"
+    make_nv12_sized(small_nv12, SMALL_WIDTH, SMALL_HEIGHT)
+    resized_nv12 = workdir / "output_nv12_resize_progressive.h264"
+    run([
+        args.resize_encoder,
+        "--format",
+        "nv12",
+        "--src-width",
+        str(SMALL_WIDTH),
+        "--src-height",
+        str(SMALL_HEIGHT),
+        str(small_nv12),
+        str(resized_nv12),
+    ])
+    validate_bitstream(args.ffprobe, args.ffmpeg, resized_nv12)
+
+    run_expect_fail([
+        args.resize_encoder,
+        "--format",
+        "i420",
+        "--src-width",
+        "1281",
+        "--src-height",
+        str(SMALL_HEIGHT),
+        str(small_i420),
+        str(workdir / "invalid_odd_width.h264"),
+    ])
+    run_expect_fail([
+        args.resize_encoder,
+        "--format",
+        "badfmt",
+        "--src-width",
+        str(SMALL_WIDTH),
+        "--src-height",
+        str(SMALL_HEIGHT),
+        str(small_i420),
+        str(workdir / "invalid_format.h264"),
+    ])
 
 
 if __name__ == "__main__":

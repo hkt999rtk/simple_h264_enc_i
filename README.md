@@ -44,6 +44,18 @@ The example encoder tool is:
 build/sh264e_encode_file
 ```
 
+The direct progressive API example tool is:
+
+```text
+build/sh264e_encode_file_progressive
+```
+
+The bilinear resize + progressive encode tool is:
+
+```text
+build/sh264e_resize_encode_progressive
+```
+
 ## Test
 
 ```sh
@@ -66,6 +78,29 @@ Encode one 2560x1440 raw YUV420 frame:
 ./build/sh264e_encode_file --format i420 input_i420.yuv output.h264
 ./build/sh264e_encode_file --format nv12 input_nv12.yuv output.h264
 ```
+
+Encode the same inputs through the direct progressive API example:
+
+```sh
+./build/sh264e_encode_file_progressive --format i420 input_i420.yuv output.h264
+./build/sh264e_encode_file_progressive --format nv12 input_nv12.yuv output.h264
+```
+
+Resize a YUV420 source into the fixed 2560x1440 encoder target and encode progressively:
+
+```sh
+./build/sh264e_resize_encode_progressive --format i420 --src-width 1280 --src-height 720 input_i420_720p.yuv output.h264
+./build/sh264e_resize_encode_progressive --format nv12 --src-width 1280 --src-height 720 input_nv12_720p.yuv output.h264
+```
+
+The resize tool accepts even source dimensions in the bilinear-friendly range:
+
+```text
+1280 <= src_width  <= 5120
+720  <= src_height <= 2880
+```
+
+It reads a full source frame for file-based validation, then generates one 2560x16 luma / 8-row chroma output slice at a time and immediately feeds that slice to the progressive encoder.
 
 Validate with ffmpeg:
 

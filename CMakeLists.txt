@@ -34,6 +34,19 @@ if(SH264E_BUILD_TOOLS)
     )
     target_link_libraries(sh264e_encode_file PRIVATE simple_h264_enc_i)
     target_compile_features(sh264e_encode_file PRIVATE c_std_99)
+
+    add_executable(sh264e_encode_file_progressive
+        tools/sh264e_encode_file_progressive.c
+    )
+    target_link_libraries(sh264e_encode_file_progressive PRIVATE simple_h264_enc_i)
+    target_compile_features(sh264e_encode_file_progressive PRIVATE c_std_99)
+
+    add_executable(sh264e_resize_encode_progressive
+        tools/sh264e_resize_encode_progressive.c
+    )
+    target_link_libraries(sh264e_resize_encode_progressive PRIVATE simple_h264_enc_i)
+    target_compile_features(sh264e_resize_encode_progressive PRIVATE c_std_99)
+
     if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(sh264e_encode_file PRIVATE
             -Wall
@@ -42,8 +55,24 @@ if(SH264E_BUILD_TOOLS)
             -Wconversion
             -Wshadow
         )
+        target_compile_options(sh264e_encode_file_progressive PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow
+        )
+        target_compile_options(sh264e_resize_encode_progressive PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow
+        )
     elseif(MSVC)
         target_compile_options(sh264e_encode_file PRIVATE /W4)
+        target_compile_options(sh264e_encode_file_progressive PRIVATE /W4)
+        target_compile_options(sh264e_resize_encode_progressive PRIVATE /W4)
     endif()
 endif()
 
@@ -84,6 +113,8 @@ if(SH264E_BUILD_TESTS)
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_ffmpeg_integration.py
                 --encoder $<TARGET_FILE:sh264e_encode_file>
+                --progressive-encoder $<TARGET_FILE:sh264e_encode_file_progressive>
+                --resize-encoder $<TARGET_FILE:sh264e_resize_encode_progressive>
                 --ffprobe ${SH264E_FFPROBE}
                 --ffmpeg ${SH264E_FFMPEG}
                 --workdir ${CMAKE_CURRENT_BINARY_DIR}/integration
