@@ -106,12 +106,52 @@ def validate_bitstream(ffprobe, ffmpeg, bitstream):
     run([ffmpeg, "-v", "error", "-i", str(bitstream), "-f", "null", "-"])
 
 
+def validate_image_pix_fmt(ffprobe, image, expected_pix_fmt):
+    probe = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=pix_fmt",
+            "-of",
+            "default=nw=1:nk=1",
+            str(image),
+        ],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    )
+    got = probe.stdout.strip()
+    if got != expected_pix_fmt:
+        raise RuntimeError(f"{image} pix_fmt: got {got}, expected {expected_pix_fmt}")
+
+
 def run_case(args, fmt, make_input):
     yuv = Path(args.workdir) / f"input_{fmt}.yuv"
     bitstream = Path(args.workdir) / f"output_{fmt}.h264"
     make_input(yuv)
     run([args.encoder, "--format", fmt, str(yuv), str(bitstream)])
     validate_bitstream(args.ffprobe, args.ffmpeg, bitstream)
+
+
+def make_color_jpeg(args, path, pix_fmt):
+    run([
+        args.ffmpeg,
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc2=size={SMALL_WIDTH}x{SMALL_HEIGHT}:rate=1",
+        "-frames:v",
+        "1",
+        "-pix_fmt",
+        pix_fmt,
+        "-q:v",
+        "3",
+        str(path),
+    ])
+    validate_image_pix_fmt(args.ffprobe, path, pix_fmt)
 
 
 def main():
@@ -193,27 +233,15 @@ def main():
         str(workdir / "invalid_format.h264"),
     ])
 
-    jpeg_input = workdir / "input_720p.jpg"
-    run([
-        args.ffmpeg,
-        "-y",
-        "-f",
-        "lavfi",
-        "-i",
-        f"testsrc2=size={SMALL_WIDTH}x{SMALL_HEIGHT}:rate=1",
-        "-frames:v",
-        "1",
-        "-q:v",
-        "3",
-        str(jpeg_input),
-    ])
-    for fmt in ("i420", "nv12"):
-        jpeg_output = workdir / f"output_jpeg_{fmt}.h264"
-        run([args.jpeg_encoder, "--format", fmt, str(jpeg_input), str(jpeg_output)])
-        validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
+    for pix_fmt in ("yuvj420p", "yuvj422p", "yuvj444p"):
+        jpeg_input = workdir / f"input_720p_{pix_fmt}.jpg"
+        make_color_jpeg(args, jpeg_input, pix_fmt)
+        for fmt in ("i420", "nv12"):
+            jpeg_output = workdir / f"output_jpeg_{pix_fmt}_{fmt}.h264"
+            run([args.jpeg_encoder, "--format", fmt, str(jpeg_input), str(jpeg_output)])
+            validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
 
     grayscale_jpeg_input = workdir / "input_gray_720p.jpg"
-    grayscale_jpeg_output = workdir / "output_jpeg_gray_i420.h264"
     run([
         args.ffmpeg,
         "-y",
@@ -231,8 +259,12 @@ def main():
         "3",
         str(grayscale_jpeg_input),
     ])
-    run([args.jpeg_encoder, "--format", "i420", str(grayscale_jpeg_input), str(grayscale_jpeg_output)])
-    validate_bitstream(args.ffprobe, args.ffmpeg, grayscale_jpeg_output)
+    # Some FFmpeg MJPEG builds encode gray sources as yuvj444p, so only the
+    # color subsampling fixtures assert exact JPEG component layout.
+    for fmt in ("i420", "nv12"):
+        grayscale_jpeg_output = workdir / f"output_jpeg_gray_{fmt}.h264"
+        run([args.jpeg_encoder, "--format", fmt, str(grayscale_jpeg_input), str(grayscale_jpeg_output)])
+        validate_bitstream(args.ffprobe, args.ffmpeg, grayscale_jpeg_output)
 
 
 if __name__ == "__main__":
