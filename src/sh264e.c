@@ -1038,8 +1038,11 @@ static sh264e_status_t streaming_init_cache(sh264e_jpeg_stream_context_t *ctx)
         }
         component->pixels = (uint8_t *)njAllocMem((int)bytes);
         if (component->pixels == NULL) {
+            sh264e_status_t status = sh264e_jpeg_alloc_arena_failed != 0u ?
+                                     SH264E_ERR_BUFFER_TOO_SMALL :
+                                     SH264E_ERR_ALLOCATION_FAILED;
             streaming_free_cache(ctx);
-            return SH264E_ERR_ALLOCATION_FAILED;
+            return status;
         }
         ctx->cache_bytes += bytes;
     }
