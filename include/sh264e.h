@@ -58,6 +58,11 @@ typedef struct sh264e_slice_t {
     ptrdiff_t stride[3];
 } sh264e_slice_t;
 
+typedef struct sh264e_jpeg_allocation_stats_t {
+    size_t current_bytes;
+    size_t peak_bytes;
+} sh264e_jpeg_allocation_stats_t;
+
 typedef struct sh264e_encoder_t sh264e_encoder_t;
 
 sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,
@@ -103,6 +108,8 @@ sh264e_status_t sh264e_resize_make_slice(const sh264e_frame_t *src_frame,
                                          sh264e_slice_t *out_slice);
 
 sh264e_status_t sh264e_jpeg_get_slice_buffer_size(size_t *out_size);
+
+sh264e_status_t sh264e_jpeg_get_last_allocation_stats(sh264e_jpeg_allocation_stats_t *out_stats);
 
 sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
                                        const uint8_t *jpeg_data,

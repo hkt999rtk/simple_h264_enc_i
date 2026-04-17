@@ -153,13 +153,19 @@ Possible approach:
 
 This gives a concrete memory budget for each source size and subsampling pattern.
 
-Example report format:
+Measured with `sh264e_encode_jpeg` after routing NanoJPEG through the library allocation shim:
 
 | Pipeline | Source | Peak bytes | Notes |
 | --- | --- | ---: | --- |
-| JPEG RGB path | 1280x720 4:2:0 | TBD | current behavior |
-| JPEG component path | 1280x720 4:2:0 | TBD | after Phase 1 |
-| JPEG component path | 2560x1440 4:2:0 | TBD | after Phase 1 |
+| JPEG RGB path | 1280x720 4:2:0 | N/A | removed from library encode path |
+| JPEG component path | 1280x720 4:2:0 | 1,382,400 | generated `yuvj420p` fixture |
+| JPEG component path | 1280x720 4:2:2 | 1,843,200 | generated `yuvj422p` fixture |
+| JPEG component path | 1280x720 4:4:4 | 2,764,800 | generated `yuvj444p` fixture |
+| JPEG component path | 2560x1440 4:2:0 | 5,529,600 | generated `yuvj420p` fixture |
+
+The public `sh264e_jpeg_get_last_allocation_stats` query reports the current
+and peak NanoJPEG allocation bytes from the last JPEG encode. Current bytes
+should return to zero after the encode path calls `njDone`.
 
 ### Validation
 

@@ -13,10 +13,16 @@ def run(cmd):
     subprocess.run(cmd, check=True)
 
 
-def run_expect_fail(cmd):
-    result = subprocess.run(cmd)
+def run_capture(cmd):
+    return subprocess.run(cmd, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def run_expect_fail(cmd, stderr_contains=None):
+    result = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode == 0:
         raise RuntimeError(f"expected command to fail: {cmd}")
+    if stderr_contains is not None and stderr_contains not in result.stderr:
+        raise RuntimeError(f"expected stderr to contain {stderr_contains!r}; got {result.stderr!r}")
 
 
 def make_i420(path):
@@ -154,6 +160,18 @@ def make_color_jpeg(args, path, pix_fmt):
     validate_image_pix_fmt(args.ffprobe, path, pix_fmt)
 
 
+def encode_jpeg(args, fmt, jpeg_input, bitstream):
+    result = run_capture([args.jpeg_encoder, "--format", fmt, str(jpeg_input), str(bitstream)])
+    if "jpeg current allocation bytes: 0" not in result.stdout:
+        raise RuntimeError(f"JPEG encoder did not release tracked allocations: {result.stdout!r}")
+    for line in result.stdout.splitlines():
+        if line.startswith("jpeg peak allocation bytes:"):
+            if int(line.rsplit(" ", 1)[1]) == 0:
+                raise RuntimeError(f"JPEG encoder reported zero peak allocation bytes: {result.stdout!r}")
+            return
+    raise RuntimeError(f"JPEG encoder did not report peak allocation bytes: {result.stdout!r}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--encoder", required=True)
@@ -236,9 +254,19 @@ def main():
     for pix_fmt in ("yuvj420p", "yuvj422p", "yuvj444p"):
         jpeg_input = workdir / f"input_720p_{pix_fmt}.jpg"
         make_color_jpeg(args, jpeg_input, pix_fmt)
+        if pix_fmt == "yuvj420p":
+            run_expect_fail([
+                args.jpeg_encoder,
+                "--test-allocation-limit",
+                "1",
+                "--format",
+                "i420",
+                str(jpeg_input),
+                str(workdir / "output_jpeg_alloc_fail.h264"),
+            ], stderr_contains="allocation failed")
         for fmt in ("i420", "nv12"):
             jpeg_output = workdir / f"output_jpeg_{pix_fmt}_{fmt}.h264"
-            run([args.jpeg_encoder, "--format", fmt, str(jpeg_input), str(jpeg_output)])
+            encode_jpeg(args, fmt, jpeg_input, jpeg_output)
             validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
 
     grayscale_jpeg_input = workdir / "input_gray_720p.jpg"
@@ -263,7 +291,7 @@ def main():
     # color subsampling fixtures assert exact JPEG component layout.
     for fmt in ("i420", "nv12"):
         grayscale_jpeg_output = workdir / f"output_jpeg_gray_{fmt}.h264"
-        run([args.jpeg_encoder, "--format", fmt, str(grayscale_jpeg_input), str(grayscale_jpeg_output)])
+        encode_jpeg(args, fmt, grayscale_jpeg_input, grayscale_jpeg_output)
         validate_bitstream(args.ffprobe, args.ffmpeg, grayscale_jpeg_output)
 
 
