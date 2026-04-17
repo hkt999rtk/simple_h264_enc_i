@@ -121,6 +121,7 @@ typedef enum _nj_result {
     NJ_OUT_OF_MEM,    // out of memory
     NJ_INTERNAL_ERR,  // internal error
     NJ_SYNTAX_ERROR,  // syntax error
+    NJ_CALLBACK_ABORT,// MCU-row callback requested decode stop
     __NJ_FINISHED,    // used internally, will never be reported
 } nj_result_t;
 
@@ -730,7 +731,7 @@ NJ_INLINE void njDecodeScan(void) {
         if (++mbx >= nj.mbwidth) {
             mbx = 0;
             if (nj.decode_mcu_rows_only && nj.mcu_row_callback) {
-                if (nj.mcu_row_callback(mby, nj.mcu_row_user)) njThrow(NJ_INTERNAL_ERR);
+                if (nj.mcu_row_callback(mby, nj.mcu_row_user)) njThrow(NJ_CALLBACK_ABORT);
             }
             if (++mby >= nj.mbheight) break;
         }

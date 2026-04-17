@@ -107,6 +107,12 @@ if(SH264E_BUILD_TESTS)
     )
     target_link_libraries(sh264e_test_api PRIVATE simple_h264_enc_i)
     target_compile_features(sh264e_test_api PRIVATE c_std_99)
+
+    add_executable(sh264e_test_jpeg_mcu_rows
+        tests/test_jpeg_mcu_rows.c
+    )
+    target_link_libraries(sh264e_test_jpeg_mcu_rows PRIVATE simple_h264_enc_i)
+    target_compile_features(sh264e_test_jpeg_mcu_rows PRIVATE c_std_99)
     if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(sh264e_test_api PRIVATE
             -Wall
@@ -115,11 +121,20 @@ if(SH264E_BUILD_TESTS)
             -Wconversion
             -Wshadow
         )
+        target_compile_options(sh264e_test_jpeg_mcu_rows PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow
+        )
     elseif(MSVC)
         target_compile_options(sh264e_test_api PRIVATE /W4)
+        target_compile_options(sh264e_test_jpeg_mcu_rows PRIVATE /W4)
     endif()
 
     add_test(NAME sh264e_api COMMAND sh264e_test_api)
+    add_test(NAME sh264e_jpeg_mcu_rows COMMAND sh264e_test_jpeg_mcu_rows)
     add_test(
         NAME sh264e_no_file_io_in_library
         COMMAND ${CMAKE_COMMAND}

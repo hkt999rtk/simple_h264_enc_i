@@ -10,6 +10,7 @@
 #define NJ_OUT_OF_MEM 3
 #define NJ_INTERNAL_ERR 4
 #define NJ_SYNTAX_ERROR 5
+#define NJ_CALLBACK_ABORT 6
 
 #define SH264E_MB_SIZE 16u
 #define SH264E_LUMA_4X4 4u
@@ -1889,6 +1890,7 @@ static sh264e_status_t map_jpeg_result(int result)
         }
         return SH264E_ERR_ALLOCATION_FAILED;
     case NJ_INTERNAL_ERR:
+    case NJ_CALLBACK_ABORT:
         return SH264E_ERR_INTERNAL;
     case NJ_NO_JPEG:
     case NJ_UNSUPPORTED:
