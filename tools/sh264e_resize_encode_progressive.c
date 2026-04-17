@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,15 @@
 #define SH264E_SCALE_MAX_SRC_HEIGHT 2880u
 #define SH264E_DST_CHROMA_WIDTH (SH264E_V1_WIDTH / 2u)
 #define SH264E_DST_CHROMA_HEIGHT (SH264E_V1_HEIGHT / 2u)
+#define SH264E_SCALE_FP_BITS 16u
+#define SH264E_SCALE_FP_ONE (1u << SH264E_SCALE_FP_BITS)
+#define SH264E_SCALE_FP_HALF (SH264E_SCALE_FP_ONE >> 1u)
+#define SH264E_SCALE_FP_BLEND_ROUND (UINT64_C(1) << ((SH264E_SCALE_FP_BITS * 2u) - 1u))
+
+typedef struct sh264e_scale_coord_t {
+    uint32_t index;
+    uint32_t fraction;
+} sh264e_scale_coord_t;
 
 static void usage(const char *argv0)
 {
@@ -69,29 +79,47 @@ static int write_exact(FILE *fp, const uint8_t *buf, size_t size)
     return fwrite(buf, 1u, size, fp) == size;
 }
 
-static int clip_u8_int(int value)
+static sh264e_scale_coord_t map_half_pixel_fixed(uint32_t dst_pos, uint32_t src_size, uint32_t dst_size)
 {
-    if (value < 0) {
-        return 0;
+    const uint64_t numerator = (uint64_t)(2u * dst_pos + 1u) *
+                               (uint64_t)src_size *
+                               (uint64_t)SH264E_SCALE_FP_ONE;
+    const uint64_t denominator = (uint64_t)dst_size * 2u;
+    const int64_t raw_pos = (int64_t)(numerator / denominator) -
+                            (int64_t)SH264E_SCALE_FP_HALF;
+    const uint64_t max_pos = (uint64_t)(src_size - 1u) * (uint64_t)SH264E_SCALE_FP_ONE;
+    sh264e_scale_coord_t coord;
+
+    if (raw_pos <= 0) {
+        coord.index = 0;
+        coord.fraction = 0;
+        return coord;
     }
-    if (value > 255) {
-        return 255;
+    if ((uint64_t)raw_pos >= max_pos) {
+        coord.index = src_size - 1u;
+        coord.fraction = 0;
+        return coord;
     }
-    return value;
+    coord.index = (uint32_t)((uint64_t)raw_pos >> SH264E_SCALE_FP_BITS);
+    coord.fraction = (uint32_t)((uint64_t)raw_pos & (uint64_t)(SH264E_SCALE_FP_ONE - 1u));
+    return coord;
 }
 
-static double map_half_pixel(uint32_t dst_pos, uint32_t src_size, uint32_t dst_size)
+static uint8_t bilinear_blend_u8(uint8_t p00,
+                                 uint8_t p01,
+                                 uint8_t p10,
+                                 uint8_t p11,
+                                 uint32_t wx,
+                                 uint32_t wy)
 {
-    double pos = ((((double)dst_pos + 0.5) * (double)src_size) / (double)dst_size) - 0.5;
-    const double max_pos = (double)(src_size - 1u);
+    const uint32_t inv_wx = SH264E_SCALE_FP_ONE - wx;
+    const uint32_t inv_wy = SH264E_SCALE_FP_ONE - wy;
+    const uint64_t top = (uint64_t)p00 * inv_wx + (uint64_t)p01 * wx;
+    const uint64_t bottom = (uint64_t)p10 * inv_wx + (uint64_t)p11 * wx;
+    const uint64_t blended = top * inv_wy + bottom * wy;
 
-    if (pos < 0.0) {
-        return 0.0;
-    }
-    if (pos > max_pos) {
-        return max_pos;
-    }
-    return pos;
+    return (uint8_t)((blended + SH264E_SCALE_FP_BLEND_ROUND) >>
+                     (SH264E_SCALE_FP_BITS * 2u));
 }
 
 static uint8_t bilinear_sample_plane(const uint8_t *src,
@@ -103,25 +131,16 @@ static uint8_t bilinear_sample_plane(const uint8_t *src,
                                      uint32_t dst_width,
                                      uint32_t dst_height)
 {
-    const double sx = map_half_pixel(dst_x, src_width, dst_width);
-    const double sy = map_half_pixel(dst_y, src_height, dst_height);
-    const uint32_t x0 = (uint32_t)sx;
-    const uint32_t y0 = (uint32_t)sy;
+    const sh264e_scale_coord_t sx = map_half_pixel_fixed(dst_x, src_width, dst_width);
+    const sh264e_scale_coord_t sy = map_half_pixel_fixed(dst_y, src_height, dst_height);
+    const uint32_t x0 = sx.index;
+    const uint32_t y0 = sy.index;
     const uint32_t x1 = x0 + 1u < src_width ? x0 + 1u : x0;
     const uint32_t y1 = y0 + 1u < src_height ? y0 + 1u : y0;
-    const double wx = sx - (double)x0;
-    const double wy = sy - (double)y0;
     const uint8_t *row0 = src + (size_t)y0 * (size_t)src_stride;
     const uint8_t *row1 = src + (size_t)y1 * (size_t)src_stride;
-    const double p00 = (double)row0[x0];
-    const double p01 = (double)row0[x1];
-    const double p10 = (double)row1[x0];
-    const double p11 = (double)row1[x1];
-    const double top = p00 + (p01 - p00) * wx;
-    const double bottom = p10 + (p11 - p10) * wx;
-    const int rounded = (int)(top + (bottom - top) * wy + 0.5);
 
-    return (uint8_t)clip_u8_int(rounded);
+    return bilinear_blend_u8(row0[x0], row0[x1], row1[x0], row1[x1], sx.fraction, sy.fraction);
 }
 
 static uint8_t bilinear_sample_nv12_chroma(const uint8_t *src,
@@ -132,26 +151,22 @@ static uint8_t bilinear_sample_nv12_chroma(const uint8_t *src,
                                            uint32_t dst_x,
                                            uint32_t dst_y)
 {
-    const double sx = map_half_pixel(dst_x, src_width, SH264E_DST_CHROMA_WIDTH);
-    const double sy = map_half_pixel(dst_y, src_height, SH264E_DST_CHROMA_HEIGHT);
-    const uint32_t x0 = (uint32_t)sx;
-    const uint32_t y0 = (uint32_t)sy;
+    const sh264e_scale_coord_t sx = map_half_pixel_fixed(dst_x, src_width, SH264E_DST_CHROMA_WIDTH);
+    const sh264e_scale_coord_t sy = map_half_pixel_fixed(dst_y, src_height, SH264E_DST_CHROMA_HEIGHT);
+    const uint32_t x0 = sx.index;
+    const uint32_t y0 = sy.index;
     const uint32_t x1 = x0 + 1u < src_width ? x0 + 1u : x0;
     const uint32_t y1 = y0 + 1u < src_height ? y0 + 1u : y0;
-    const double wx = sx - (double)x0;
-    const double wy = sy - (double)y0;
     const uint8_t *row0 = src + (size_t)y0 * (size_t)src_stride;
     const uint8_t *row1 = src + (size_t)y1 * (size_t)src_stride;
     const size_t c = component;
-    const double p00 = (double)row0[(size_t)x0 * 2u + c];
-    const double p01 = (double)row0[(size_t)x1 * 2u + c];
-    const double p10 = (double)row1[(size_t)x0 * 2u + c];
-    const double p11 = (double)row1[(size_t)x1 * 2u + c];
-    const double top = p00 + (p01 - p00) * wx;
-    const double bottom = p10 + (p11 - p10) * wx;
-    const int rounded = (int)(top + (bottom - top) * wy + 0.5);
 
-    return (uint8_t)clip_u8_int(rounded);
+    return bilinear_blend_u8(row0[(size_t)x0 * 2u + c],
+                             row0[(size_t)x1 * 2u + c],
+                             row1[(size_t)x0 * 2u + c],
+                             row1[(size_t)x1 * 2u + c],
+                             sx.fraction,
+                             sy.fraction);
 }
 
 static void scale_plane_slice(const uint8_t *src,

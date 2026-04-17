@@ -262,6 +262,8 @@ src_pos = (dst_pos + 0.5) * src_size / dst_size - 0.5
 
 Source sample indices are clamped at image boundaries.
 
+The resize tool implementation should use fixed-point integer arithmetic for coordinate mapping and bilinear interpolation.
+
 ### Progressive Encoder Integration
 
 The tool may read a full source frame for file-based validation, but the resized output side is progressive.

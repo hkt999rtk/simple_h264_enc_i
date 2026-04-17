@@ -101,6 +101,7 @@ The resize tool accepts even source dimensions in the bilinear-friendly range:
 ```
 
 It reads a full source frame for file-based validation, then generates one 2560x16 luma / 8-row chroma output slice at a time and immediately feeds that slice to the progressive encoder.
+The scaler uses fixed-point bilinear interpolation.
 
 Validate with ffmpeg:
 
