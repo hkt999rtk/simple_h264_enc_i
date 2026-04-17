@@ -35,6 +35,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         COMPILE_OPTIONS "-Wno-conversion;-Wno-shadow"
     )
 endif()
+set_property(SOURCE src/nanojpeg.c APPEND PROPERTY COMPILE_DEFINITIONS NJ_USE_LIBC=0)
 
 if(SH264E_BUILD_TOOLS)
     add_executable(sh264e_encode_file
@@ -193,6 +194,7 @@ if(SH264E_BUILD_TESTS)
                     -fno-builtin
                     -ffunction-sections
                     -fdata-sections
+                    -DNJ_USE_LIBC=0
                     ${extra_compile_options}
                     -I${CMAKE_CURRENT_SOURCE_DIR}/include
                     -T${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_cortexm.ld

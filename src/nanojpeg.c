@@ -305,6 +305,9 @@ int main(int argc, char* argv[]) {
     extern void njFreeMem(void* block);
     extern void njFillMem(void* block, unsigned char byte, int size);
     extern void njCopyMem(void* dest, const void* src, int size);
+    #ifndef NULL
+        #define NULL ((void*)0)
+    #endif
 #endif
 
 typedef struct _nj_code {

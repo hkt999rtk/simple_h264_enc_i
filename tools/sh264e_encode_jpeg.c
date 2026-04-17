@@ -4,9 +4,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+void sh264e_jpeg_set_test_allocation_limit(size_t max_bytes);
+
 static void usage(const char *argv0)
 {
-    fprintf(stderr, "usage: %s --format i420|nv12 input.jpg output.h264\n", argv0);
+    fprintf(stderr, "usage: %s [--test-allocation-limit BYTES] --format i420|nv12 input.jpg output.h264\n",
+            argv0);
 }
 
 static int parse_format(const char *text, sh264e_pixfmt_t *pixfmt)
@@ -20,6 +23,22 @@ static int parse_format(const char *text, sh264e_pixfmt_t *pixfmt)
         return 1;
     }
     return 0;
+}
+
+static int parse_size(const char *text, size_t *out_size)
+{
+    char *end = NULL;
+    unsigned long value;
+
+    if (text == NULL || *text == '\0' || out_size == NULL) {
+        return 0;
+    }
+    value = strtoul(text, &end, 10);
+    if (end == text || *end != '\0') {
+        return 0;
+    }
+    *out_size = (size_t)value;
+    return 1;
 }
 
 static int read_file(const char *path, uint8_t **out_data, size_t *out_size)
@@ -86,14 +105,25 @@ int main(int argc, char **argv)
     size_t work_size = 0;
     size_t output_capacity = 0;
     size_t output_size = 0;
+    size_t allocation_limit = (size_t)-1;
+    int argi = 1;
     int rc = 1;
 
-    if (argc != 5 || strcmp(argv[1], "--format") != 0 || !parse_format(argv[2], &pixfmt)) {
+    if (argc >= 4 && strcmp(argv[argi], "--test-allocation-limit") == 0) {
+        if (!parse_size(argv[argi + 1], &allocation_limit)) {
+            usage(argv[0]);
+            return 2;
+        }
+        argi += 2;
+    }
+
+    if (argc - argi != 4 || strcmp(argv[argi], "--format") != 0 ||
+        !parse_format(argv[argi + 1], &pixfmt)) {
         usage(argv[0]);
         return 2;
     }
-    input_path = argv[3];
-    output_path = argv[4];
+    input_path = argv[argi + 2];
+    output_path = argv[argi + 3];
 
     if (!read_file(input_path, &jpeg_data, &jpeg_size)) {
         fprintf(stderr, "failed to read JPEG input: %s\n", input_path);
@@ -130,6 +160,9 @@ int main(int argc, char **argv)
         goto done;
     }
 
+    if (allocation_limit != (size_t)-1) {
+        sh264e_jpeg_set_test_allocation_limit(allocation_limit);
+    }
     status = sh264e_encode_jpeg_idr(encoder, jpeg_data, jpeg_size,
                                     work, work_size,
                                     output_buf, output_capacity, &output_size);
@@ -148,6 +181,17 @@ int main(int argc, char **argv)
         goto done;
     }
 
+    {
+        sh264e_jpeg_allocation_stats_t stats;
+        status = sh264e_jpeg_get_last_allocation_stats(&stats);
+        if (status != SH264E_OK) {
+            fprintf(stderr, "sh264e_jpeg_get_last_allocation_stats failed: %s\n",
+                    sh264e_status_string(status));
+            goto done;
+        }
+        printf("jpeg current allocation bytes: %zu\n", stats.current_bytes);
+        printf("jpeg peak allocation bytes: %zu\n", stats.peak_bytes);
+    }
     printf("encoded JPEG input to progressive IDR frame\n");
     rc = 0;
 

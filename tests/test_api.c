@@ -163,6 +163,7 @@ int main(void)
     uint8_t *slice_output = NULL;
     uint8_t *small_input = NULL;
     uint8_t *resize_work = NULL;
+    sh264e_jpeg_allocation_stats_t jpeg_alloc_stats;
     int ok = 1;
 
     memset(&config, 0, sizeof(config));
@@ -196,6 +197,18 @@ int main(void)
     }
     if (header_capacity == 0u || slice_capacity == 0u) {
         fprintf(stderr, "progressive max output size returned zero\n");
+        ok = 0;
+    }
+    ok &= expect_status("null JPEG allocation stats",
+                        sh264e_jpeg_get_last_allocation_stats(NULL),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    jpeg_alloc_stats.current_bytes = 123u;
+    jpeg_alloc_stats.peak_bytes = 456u;
+    ok &= expect_status("initial JPEG allocation stats",
+                        sh264e_jpeg_get_last_allocation_stats(&jpeg_alloc_stats),
+                        SH264E_OK);
+    if (jpeg_alloc_stats.current_bytes != 0u || jpeg_alloc_stats.peak_bytes != 0u) {
+        fprintf(stderr, "initial JPEG allocation stats should be zero\n");
         ok = 0;
     }
 

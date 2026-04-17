@@ -68,6 +68,10 @@ typedef struct sh264e_jpeg_component_t {
     ptrdiff_t stride;
 } sh264e_jpeg_component_t;
 
+typedef struct sh264e_jpeg_alloc_header_t {
+    size_t size;
+} sh264e_jpeg_alloc_header_t;
+
 void njInit(void);
 int njDecodeComponents(const void *jpeg, const int size);
 int njGetWidth(void);
@@ -78,6 +82,10 @@ int njGetComponentWidth(int index);
 int njGetComponentHeight(int index);
 int njGetComponentStride(int index);
 void njDone(void);
+
+static size_t sh264e_jpeg_alloc_current_bytes;
+static size_t sh264e_jpeg_alloc_peak_bytes;
+static size_t sh264e_jpeg_alloc_limit = (size_t)-1;
 
 static void reset_progressive_state(sh264e_encoder_t *encoder);
 
@@ -99,6 +107,82 @@ static const uint8_t k_cbp_intra_code_num[48] = {
 };
 
 static const int k_dequant_dc_scale[6] = {10, 11, 13, 14, 16, 18};
+
+static void jpeg_allocation_stats_reset(void)
+{
+    sh264e_jpeg_alloc_current_bytes = 0u;
+    sh264e_jpeg_alloc_peak_bytes = 0u;
+}
+
+void sh264e_jpeg_set_test_allocation_limit(size_t max_bytes)
+{
+    sh264e_jpeg_alloc_limit = max_bytes;
+}
+
+void *njAllocMem(int size)
+{
+    const size_t requested = (size > 0) ? (size_t)size : 0u;
+    sh264e_jpeg_alloc_header_t *header;
+    void *raw;
+
+    if (requested == 0u || requested > ((size_t)-1) - sizeof(*header)) {
+        return NULL;
+    }
+    if (sh264e_jpeg_alloc_current_bytes > ((size_t)-1) - requested) {
+        return NULL;
+    }
+    if (sh264e_jpeg_alloc_limit != (size_t)-1) {
+        if (sh264e_jpeg_alloc_current_bytes >= sh264e_jpeg_alloc_limit ||
+            requested > sh264e_jpeg_alloc_limit - sh264e_jpeg_alloc_current_bytes) {
+            return NULL;
+        }
+    }
+
+    raw = malloc(sizeof(*header) + requested);
+    if (raw == NULL) {
+        return NULL;
+    }
+
+    header = (sh264e_jpeg_alloc_header_t *)raw;
+    header->size = requested;
+    sh264e_jpeg_alloc_current_bytes += requested;
+    if (sh264e_jpeg_alloc_current_bytes > sh264e_jpeg_alloc_peak_bytes) {
+        sh264e_jpeg_alloc_peak_bytes = sh264e_jpeg_alloc_current_bytes;
+    }
+
+    return (void *)(header + 1);
+}
+
+void njFreeMem(void *block)
+{
+    sh264e_jpeg_alloc_header_t *header;
+
+    if (block == NULL) {
+        return;
+    }
+
+    header = ((sh264e_jpeg_alloc_header_t *)block) - 1;
+    if (sh264e_jpeg_alloc_current_bytes >= header->size) {
+        sh264e_jpeg_alloc_current_bytes -= header->size;
+    } else {
+        sh264e_jpeg_alloc_current_bytes = 0u;
+    }
+    free(header);
+}
+
+void njFillMem(void *block, unsigned char byte, int size)
+{
+    if (block != NULL && size > 0) {
+        memset(block, byte, (size_t)size);
+    }
+}
+
+void njCopyMem(void *dest, const void *src, int size)
+{
+    if (dest != NULL && src != NULL && size > 0) {
+        memcpy(dest, src, (size_t)size);
+    }
+}
 
 static sh264e_status_t validate_config(const sh264e_config_t *config)
 {
@@ -1359,6 +1443,16 @@ sh264e_status_t sh264e_jpeg_get_slice_buffer_size(size_t *out_size)
     return SH264E_OK;
 }
 
+sh264e_status_t sh264e_jpeg_get_last_allocation_stats(sh264e_jpeg_allocation_stats_t *out_stats)
+{
+    if (out_stats == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    out_stats->current_bytes = sh264e_jpeg_alloc_current_bytes;
+    out_stats->peak_bytes = sh264e_jpeg_alloc_peak_bytes;
+    return SH264E_OK;
+}
+
 sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
                                        const uint8_t *jpeg_data,
                                        size_t jpeg_size,
@@ -1397,6 +1491,7 @@ sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
         return SH264E_ERR_BUFFER_TOO_SMALL;
     }
 
+    jpeg_allocation_stats_reset();
     njInit();
     status = map_jpeg_result(njDecodeComponents(jpeg_data, (int)jpeg_size));
     if (status != SH264E_OK) {
