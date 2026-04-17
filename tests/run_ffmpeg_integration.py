@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import subprocess
 from pathlib import Path
 
@@ -131,6 +132,53 @@ def validate_image_pix_fmt(ffprobe, image, expected_pix_fmt):
     got = probe.stdout.strip()
     if got != expected_pix_fmt:
         raise RuntimeError(f"{image} pix_fmt: got {got}, expected {expected_pix_fmt}")
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def decode_i420_frame(args, bitstream, raw_output):
+    run([
+        args.ffmpeg,
+        "-y",
+        "-v",
+        "error",
+        "-i",
+        str(bitstream),
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "yuv420p",
+        str(raw_output),
+    ])
+    expected_size = WIDTH * HEIGHT * 3 // 2
+    got_size = raw_output.stat().st_size
+    if got_size != expected_size:
+        raise RuntimeError(
+            f"decoded frame size mismatch for {bitstream}: got {got_size}, expected {expected_size}"
+        )
+    return sha256_file(raw_output)
+
+
+def compare_decoded_i420(args, reference_bitstream, candidate_bitstream, stem):
+    workdir = Path(args.workdir)
+    reference_raw = workdir / f"{stem}_reference.yuv"
+    candidate_raw = workdir / f"{stem}_candidate.yuv"
+    reference_hash = decode_i420_frame(args, reference_bitstream, reference_raw)
+    candidate_hash = decode_i420_frame(args, candidate_bitstream, candidate_raw)
+    if reference_hash != candidate_hash:
+        raise RuntimeError(
+            "decoded frame mismatch between component-plane and streaming JPEG paths: "
+            f"{reference_hash} != {candidate_hash}"
+        )
 
 
 def run_case(args, fmt, make_input):
@@ -279,6 +327,7 @@ def main():
 
     for pix_fmt in ("yuvj420p", "yuvj422p", "yuvj444p"):
         jpeg_input = workdir / f"input_720p_{pix_fmt}.jpg"
+        streaming_output = None
         make_color_jpeg(args, jpeg_input, pix_fmt)
         if pix_fmt == "yuvj420p":
             run_expect_fail([
@@ -297,6 +346,9 @@ def main():
             jpeg_output = workdir / f"output_jpeg_{pix_fmt}_{fmt}.h264"
             encode_jpeg(args, fmt, jpeg_input, jpeg_output)
             validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
+            if pix_fmt == "yuvj420p" and fmt == "i420":
+                compare_decoded_i420(args, jpeg_output, streaming_output,
+                                     "output_jpeg_yuvj420p_i420_streaming_compare")
 
     grayscale_jpeg_input = workdir / "input_gray_720p.jpg"
     run([

@@ -140,10 +140,10 @@ encoder:
 * Encode through the streaming prototype to Annex B H.264.
 * Decode the H.264 with ffmpeg and verify the same stream metadata as the
   component-plane path.
+* Decode both the streaming and component-plane H.264 outputs to raw `yuv420p`
+  and compare SHA-256 hashes for the first 1280x720 4:2:0 I420 fixture.
 * Confirm the NanoJPEG allocation peak is below the 1,382,400-byte full
   component-plane allocation for the same fixture.
-* Compare representative slice checksums or pixels against the component-plane
-  scaler output to catch row-window lifetime mistakes.
 * Add fixtures with restart markers before treating restart handling as done.
 * Keep the component-plane arena path as the compatibility fallback until the
   streaming path covers grayscale, 4:2:0, 4:2:2, and 4:4:4.
