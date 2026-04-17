@@ -125,6 +125,12 @@ if(SH264E_BUILD_TESTS)
             -DSH264E_SRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}/src
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_no_file_io.cmake
     )
+    add_test(
+        NAME sh264e_jpeg_no_rgb_path
+        COMMAND ${CMAKE_COMMAND}
+            -DSH264E_SRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}/src
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_jpeg_no_rgb_path.cmake
+    )
 
     find_package(Python3 COMPONENTS Interpreter)
     find_program(SH264E_FFPROBE ffprobe)

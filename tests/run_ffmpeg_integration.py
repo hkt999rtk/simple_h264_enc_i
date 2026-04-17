@@ -194,7 +194,6 @@ def main():
     ])
 
     jpeg_input = workdir / "input_720p.jpg"
-    jpeg_output = workdir / "output_jpeg_i420.h264"
     run([
         args.ffmpeg,
         "-y",
@@ -208,8 +207,32 @@ def main():
         "3",
         str(jpeg_input),
     ])
-    run([args.jpeg_encoder, "--format", "i420", str(jpeg_input), str(jpeg_output)])
-    validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
+    for fmt in ("i420", "nv12"):
+        jpeg_output = workdir / f"output_jpeg_{fmt}.h264"
+        run([args.jpeg_encoder, "--format", fmt, str(jpeg_input), str(jpeg_output)])
+        validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
+
+    grayscale_jpeg_input = workdir / "input_gray_720p.jpg"
+    grayscale_jpeg_output = workdir / "output_jpeg_gray_i420.h264"
+    run([
+        args.ffmpeg,
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc2=size={SMALL_WIDTH}x{SMALL_HEIGHT}:rate=1",
+        "-frames:v",
+        "1",
+        "-vf",
+        "format=gray",
+        "-pix_fmt",
+        "gray",
+        "-q:v",
+        "3",
+        str(grayscale_jpeg_input),
+    ])
+    run([args.jpeg_encoder, "--format", "i420", str(grayscale_jpeg_input), str(grayscale_jpeg_output)])
+    validate_bitstream(args.ffprobe, args.ffmpeg, grayscale_jpeg_output)
 
 
 if __name__ == "__main__":
