@@ -124,12 +124,40 @@ if(SH264E_BUILD_TESTS)
             -DSH264E_SRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}/src
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_no_file_io.cmake
     )
+    add_test(
+        NAME sh264e_jpeg_no_rgb_path
+        COMMAND ${CMAKE_COMMAND}
+            -DSH264E_SRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}/src
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_jpeg_no_rgb_path.cmake
+    )
 
     find_package(Python3 COMPONENTS Interpreter)
     find_program(SH264E_FFPROBE ffprobe)
     find_program(SH264E_FFMPEG ffmpeg)
     find_program(SH264E_ARM_NONE_EABI_GCC arm-none-eabi-gcc)
     find_program(SH264E_QEMU_SYSTEM_ARM qemu-system-arm)
+    set(SH264E_CAN_BUILD_QEMU_TESTS OFF)
+    if(SH264E_ARM_NONE_EABI_GCC AND SH264E_QEMU_SYSTEM_ARM)
+        set(SH264E_ARM_STDLIB_PROBE ${CMAKE_CURRENT_BINARY_DIR}/sh264e_arm_stdlib_probe.c)
+        file(WRITE ${SH264E_ARM_STDLIB_PROBE}
+            "#include <stdlib.h>\nint main(void) { return 0; }\n"
+        )
+        execute_process(
+            COMMAND ${SH264E_ARM_NONE_EABI_GCC}
+                -x c
+                -c
+                ${SH264E_ARM_STDLIB_PROBE}
+                -o ${CMAKE_CURRENT_BINARY_DIR}/sh264e_arm_stdlib_probe.o
+            RESULT_VARIABLE SH264E_ARM_STDLIB_PROBE_RESULT
+            OUTPUT_QUIET
+            ERROR_QUIET
+        )
+        if(SH264E_ARM_STDLIB_PROBE_RESULT EQUAL 0)
+            set(SH264E_CAN_BUILD_QEMU_TESTS ON)
+        else()
+            message(STATUS "Skipping QEMU firmware tests: arm-none-eabi-gcc cannot compile <stdlib.h>")
+        endif()
+    endif()
     if(Python3_Interpreter_FOUND AND SH264E_FFPROBE AND SH264E_FFMPEG AND SH264E_BUILD_TOOLS)
         add_test(
             NAME sh264e_ffmpeg_integration
@@ -145,7 +173,7 @@ if(SH264E_BUILD_TESTS)
         )
     endif()
 
-    if(SH264E_ARM_NONE_EABI_GCC AND SH264E_QEMU_SYSTEM_ARM)
+    if(SH264E_CAN_BUILD_QEMU_TESTS)
         function(sh264e_add_qemu_firmware TARGET_NAME SOURCE CPU MACHINE)
             set(ELF_PATH ${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME}.elf)
             add_custom_command(
