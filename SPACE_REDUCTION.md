@@ -220,7 +220,8 @@ Implemented API:
 
 ### Plan
 
-Longer term, avoid full decoded component planes.
+Longer term, avoid full decoded component planes. The detailed design note is
+tracked in `docs/JPEG_MCU_ROW_STREAMING.md`.
 
 Decode JPEG MCU rows into a rolling source-row cache:
 
@@ -233,7 +234,11 @@ JPEG bitstream
 -> H.264 slice encode
 ```
 
-This is a larger decoder refactor and should not be the immediate next step.
+This is a larger decoder refactor and should not replace the component-plane
+path until a narrow prototype is validated. The first slice should keep the
+current baseline JPEG scope, decode one MCU row at a time into component row
+rings, and feed the existing progressive H.264 slice encoder when enough source
+rows are available for the next 16-row luma output slice.
 
 ### Expected Benefit
 
@@ -246,6 +251,30 @@ For bilinear scaling, each output row needs at most two source rows per componen
 * vertical scaling ratio
 * restart marker boundaries
 * IDCT block output lifetime
+
+Approximate component-cache targets from the design note:
+
+| Source | Full component planes | Approx streaming cache |
+| --- | ---: | ---: |
+| 1280x720 4:2:0 | 1,382,400 | 30,720 |
+| 1280x720 4:2:2 | 1,843,200 | 61,440 |
+| 1280x720 4:4:4 | 2,764,800 | 61,440 |
+| 5120x2880 4:2:0 | not yet measured | 368,640 |
+| 5120x2880 4:4:4 | not yet measured | 614,400 |
+
+These estimates exclude caller-owned JPEG input, the existing 61,440-byte
+encoder slice work buffer, and the H.264 output buffer.
+
+### First Prototype Boundary
+
+* Keep the public API unchanged until the internal row-window contract is proven.
+* Support baseline sequential grayscale or three-component YCbCr JPEGs.
+* Reject progressive/lossless JPEG, arithmetic coding, CMYK/other color spaces,
+  non-power-of-two sampling, and non-interleaved multi-scan JPEGs.
+* Preserve restart marker handling by resetting DC predictors and bitstream
+  state at the same MCU intervals as the current full-plane path.
+* Validate a 1280x720 4:2:0 fixture first, then expand to 4:2:2, 4:4:4, and
+  grayscale before making it the default JPEG path.
 
 ### Risks
 

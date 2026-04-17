@@ -24,7 +24,7 @@ include/  public C API
 src/      encoder library implementation
 tools/    command-line validation/example tools
 tests/    CTest validation
-docs/     design specification
+docs/     design specifications and follow-on design notes
 ```
 
 ## Build
