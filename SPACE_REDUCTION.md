@@ -235,10 +235,12 @@ JPEG bitstream
 ```
 
 This is a larger decoder refactor and should not replace the component-plane
-path until a narrow prototype is validated. The first slice should keep the
-current baseline JPEG scope, decode one MCU row at a time into component row
-rings, and feed the existing progressive H.264 slice encoder when enough source
-rows are available for the next 16-row luma output slice.
+path until the hidden prototype has passed the public JPEG matrix. The current
+prototype decodes one MCU row at a time into component row rings, feeds the
+existing progressive H.264 slice encoder when enough source rows are available
+for the next output slice, and uses the same caller-provided JPEG arena policy
+as the component-plane path for both NanoJPEG's one-MCU-row buffers and the
+retained row cache.
 
 ### Expected Benefit
 
@@ -259,27 +261,30 @@ Approximate component-cache targets from the design note:
 | 1280x720 4:2:0 | 1,382,400 | 61,440 |
 | 1280x720 4:2:2 | 1,843,200 | 81,920 |
 | 1280x720 4:4:4 | 2,764,800 | 122,880 |
-| 5120x2880 4:2:0 | not yet measured | 368,640 |
-| 5120x2880 4:4:4 | not yet measured | 614,400 |
+| 2560x1440 4:2:0 | 5,529,600 | 184,320 |
+| 5120x2880 4:2:0 | not yet measured | 491,520 |
+| 5120x2880 4:4:4 | not yet measured | 819,200 |
 
 These estimates exclude caller-owned JPEG input, the existing 61,440-byte
-encoder slice work buffer, and the H.264 output buffer.
+encoder slice work buffer, and the H.264 output buffer. The streaming cache
+adds one MCU-row margin beyond the maximum fixed-point source window so slices
+at row-window boundaries can still sample the previous row.
 
-### First Prototype Boundary
+### Current Prototype Boundary
 
 * Keep the public API unchanged until the internal row-window contract is proven.
-* Support baseline sequential grayscale or three-component YCbCr JPEGs.
+* Support baseline sequential grayscale or three-component YCbCr JPEGs within
+  the public JPEG source-size policy.
 * Reject progressive/lossless JPEG, arithmetic coding, CMYK/other color spaces,
   non-power-of-two sampling, and non-interleaved multi-scan JPEGs.
 * Preserve restart marker handling by resetting DC predictors and bitstream
   state at the same MCU intervals as the current full-plane path.
-* Validate 1280x720 4:2:0, 4:2:2, and 4:4:4 fixtures with
-  `sh264e_encode_jpeg --streaming-prototype`, including a `cjpeg`-generated
-  DRI/RST restart-marker fixture when `cjpeg` is available, then expand to
-  grayscale before making it the default JPEG path.
-* Keep the row-window bridge hidden for this prototype. Promotion to the
-  production/default JPEG path should wait for dynamic source-size cache sizing,
-  caller-provided arena integration, NV12 output, and grayscale coverage.
+* Validate 1280x720 4:2:0, 4:2:2, and 4:4:4 fixtures, 2560x1440 4:2:0,
+  grayscale, I420 and NV12 output, and a `cjpeg`-generated DRI/RST
+  restart-marker fixture when `cjpeg` is available.
+* Keep the row-window bridge hidden and opt-in for now. The production/default
+  JPEG path remains the component-plane arena path until the streaming path is
+  exposed through a public policy rather than a tool-only flag.
 
 ### Risks
 

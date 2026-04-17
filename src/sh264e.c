@@ -79,6 +79,7 @@ typedef struct sh264e_jpeg_stream_component_t {
     uint32_t height;
     uint32_t row0;
     uint32_t rows;
+    uint32_t cache_rows;
     uint32_t rows_per_mcu;
     ptrdiff_t stride;
 } sh264e_jpeg_stream_component_t;
@@ -92,6 +93,8 @@ typedef struct sh264e_jpeg_stream_context_t {
     size_t cache_bytes;
     unsigned next_slice;
     unsigned idr_started;
+    int component_count;
+    int measure_only;
     int initialized;
     sh264e_status_t status;
     sh264e_jpeg_stream_component_t components[3];
@@ -784,6 +787,32 @@ static void streaming_scale_component_slice(const sh264e_jpeg_stream_component_t
     }
 }
 
+static void streaming_scale_nv12_component_chroma_slice(const sh264e_jpeg_stream_component_t *cb,
+                                                        const sh264e_jpeg_stream_component_t *cr,
+                                                        uint8_t *dst_uv,
+                                                        uint32_t dst_y_start)
+{
+    sh264e_axis_mapper_t y_mapper = scale_axis_mapper_init(cb->height,
+                                                           SH264E_V1_HEIGHT / 2u,
+                                                           dst_y_start);
+    uint32_t y;
+
+    for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
+        uint8_t *row = dst_uv + (size_t)y * SH264E_V1_WIDTH;
+        const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, cb->height);
+        sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(cb->width, SH264E_CHROMA_WIDTH, 0u);
+        uint32_t x;
+
+        for (x = 0; x < SH264E_CHROMA_WIDTH; x++) {
+            const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, cb->width);
+            row[(size_t)x * 2u] = streaming_bilinear_sample_plane(cb, sx, sy);
+            row[(size_t)x * 2u + 1u] = streaming_bilinear_sample_plane(cr, sx, sy);
+            scale_axis_mapper_advance(&x_mapper);
+        }
+        scale_axis_mapper_advance(&y_mapper);
+    }
+}
+
 static void streaming_source_range(uint32_t src_height,
                                    uint32_t dst_height,
                                    uint32_t dst_y_start,
@@ -811,6 +840,32 @@ static void streaming_source_range(uint32_t src_height,
     *out_max_y = max_y;
 }
 
+static uint32_t streaming_cache_rows_for_slice_window(uint32_t src_height,
+                                                      uint32_t dst_height,
+                                                      uint32_t dst_rows,
+                                                      uint32_t rows_per_mcu)
+{
+    uint32_t max_rows = rows_per_mcu;
+    uint32_t slice_y;
+
+    for (slice_y = 0u; slice_y < dst_height; slice_y += dst_rows) {
+        uint32_t min_y;
+        uint32_t max_y;
+        uint32_t rows;
+
+        streaming_source_range(src_height, dst_height, slice_y, dst_rows, &min_y, &max_y);
+        rows = max_y - min_y + 1u;
+        if (rows > max_rows) {
+            max_rows = rows;
+        }
+    }
+
+    if ((max_rows % rows_per_mcu) != 0u) {
+        max_rows += rows_per_mcu - (max_rows % rows_per_mcu);
+    }
+    return max_rows + rows_per_mcu;
+}
+
 static int streaming_slice_available(const sh264e_jpeg_stream_context_t *ctx, unsigned slice_index)
 {
     uint32_t min_y;
@@ -828,7 +883,7 @@ static int streaming_slice_available(const sh264e_jpeg_stream_context_t *ctx, un
         return 0;
     }
 
-    for (i = 1u; i < 3u; i++) {
+    for (i = 1u; i < (unsigned)ctx->component_count; i++) {
         streaming_source_range(ctx->components[i].height,
                                SH264E_V1_HEIGHT / 2u,
                                slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT,
@@ -856,16 +911,20 @@ static void streaming_make_i420_slice(const sh264e_jpeg_stream_context_t *ctx,
                                     slice_index * SH264E_V1_SLICE_LUMA_HEIGHT,
                                     SH264E_V1_SLICE_LUMA_HEIGHT,
                                     SH264E_V1_WIDTH);
-    streaming_scale_component_slice(&ctx->components[1], dst_u,
-                                    SH264E_CHROMA_WIDTH, SH264E_V1_HEIGHT / 2u,
-                                    slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT,
-                                    SH264E_V1_SLICE_CHROMA_HEIGHT,
-                                    SH264E_CHROMA_WIDTH);
-    streaming_scale_component_slice(&ctx->components[2], dst_v,
-                                    SH264E_CHROMA_WIDTH, SH264E_V1_HEIGHT / 2u,
-                                    slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT,
-                                    SH264E_V1_SLICE_CHROMA_HEIGHT,
-                                    SH264E_CHROMA_WIDTH);
+    if (ctx->component_count == 1) {
+        jpeg_fill_i420_neutral_chroma(dst_u, dst_v);
+    } else {
+        streaming_scale_component_slice(&ctx->components[1], dst_u,
+                                        SH264E_CHROMA_WIDTH, SH264E_V1_HEIGHT / 2u,
+                                        slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT,
+                                        SH264E_V1_SLICE_CHROMA_HEIGHT,
+                                        SH264E_CHROMA_WIDTH);
+        streaming_scale_component_slice(&ctx->components[2], dst_v,
+                                        SH264E_CHROMA_WIDTH, SH264E_V1_HEIGHT / 2u,
+                                        slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT,
+                                        SH264E_V1_SLICE_CHROMA_HEIGHT,
+                                        SH264E_CHROMA_WIDTH);
+    }
 
     memset(slice, 0, sizeof(*slice));
     slice->pixfmt = SH264E_PIXFMT_I420;
@@ -877,12 +936,40 @@ static void streaming_make_i420_slice(const sh264e_jpeg_stream_context_t *ctx,
     slice->stride[2] = SH264E_CHROMA_WIDTH;
 }
 
+static void streaming_make_nv12_slice(const sh264e_jpeg_stream_context_t *ctx,
+                                      unsigned slice_index,
+                                      sh264e_slice_t *slice)
+{
+    uint8_t *dst_y = ctx->work_buffer;
+    uint8_t *dst_uv = dst_y + (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_LUMA_HEIGHT;
+
+    streaming_scale_component_slice(&ctx->components[0], dst_y,
+                                    SH264E_V1_WIDTH, SH264E_V1_HEIGHT,
+                                    slice_index * SH264E_V1_SLICE_LUMA_HEIGHT,
+                                    SH264E_V1_SLICE_LUMA_HEIGHT,
+                                    SH264E_V1_WIDTH);
+    if (ctx->component_count == 1) {
+        jpeg_fill_nv12_neutral_chroma(dst_uv);
+    } else {
+        streaming_scale_nv12_component_chroma_slice(&ctx->components[1], &ctx->components[2],
+                                                    dst_uv,
+                                                    slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT);
+    }
+
+    memset(slice, 0, sizeof(*slice));
+    slice->pixfmt = SH264E_PIXFMT_NV12;
+    slice->plane[0] = dst_y;
+    slice->plane[1] = dst_uv;
+    slice->stride[0] = SH264E_V1_WIDTH;
+    slice->stride[1] = SH264E_V1_WIDTH;
+}
+
 static void streaming_free_cache(sh264e_jpeg_stream_context_t *ctx)
 {
     unsigned i;
 
     for (i = 0u; i < 3u; i++) {
-        free(ctx->components[i].pixels);
+        njFreeMem(ctx->components[i].pixels);
         ctx->components[i].pixels = NULL;
     }
     ctx->initialized = 0;
@@ -891,28 +978,38 @@ static void streaming_free_cache(sh264e_jpeg_stream_context_t *ctx)
 static sh264e_status_t streaming_init_cache(sh264e_jpeg_stream_context_t *ctx)
 {
     const int component_count = njGetComponentCount();
+    const int image_width = njGetWidth();
+    const int image_height = njGetHeight();
     const int y_width = njGetComponentWidth(0);
     const int y_height = njGetComponentHeight(0);
-    const int cb_width = njGetComponentWidth(1);
-    const int cb_height = njGetComponentHeight(1);
-    const int cr_width = njGetComponentWidth(2);
-    const int cr_height = njGetComponentHeight(2);
     unsigned i;
 
-    if (component_count != 3 || njGetWidth() != 1280 || njGetHeight() != 720) {
+    if (component_count != 1 && component_count != 3) {
         return SH264E_ERR_UNSUPPORTED_CONFIG;
     }
-    if (y_width != 1280 || y_height != 720 ||
-        cb_width != cr_width || cb_height != cr_height) {
+    if (image_width < (int)SH264E_RESIZE_MIN_SRC_WIDTH ||
+        image_width > (int)SH264E_RESIZE_MAX_SRC_WIDTH ||
+        image_height < (int)SH264E_RESIZE_MIN_SRC_HEIGHT ||
+        image_height > (int)SH264E_RESIZE_MAX_SRC_HEIGHT ||
+        (image_width & 1) != 0 ||
+        (image_height & 1) != 0) {
         return SH264E_ERR_UNSUPPORTED_CONFIG;
     }
-    if (!((cb_width == 640 && cb_height == 360) ||
-          (cb_width == 640 && cb_height == 720) ||
-          (cb_width == 1280 && cb_height == 720))) {
+    if (y_width != image_width || y_height != image_height) {
         return SH264E_ERR_UNSUPPORTED_CONFIG;
     }
+    if (component_count == 3) {
+        const int cb_width = njGetComponentWidth(1);
+        const int cb_height = njGetComponentHeight(1);
+        const int cr_width = njGetComponentWidth(2);
+        const int cr_height = njGetComponentHeight(2);
+        if (cb_width != cr_width || cb_height != cr_height) {
+            return SH264E_ERR_UNSUPPORTED_CONFIG;
+        }
+    }
+    ctx->component_count = component_count;
 
-    for (i = 0u; i < 3u; i++) {
+    for (i = 0u; i < (unsigned)component_count; i++) {
         sh264e_jpeg_stream_component_t *component = &ctx->components[i];
         const int width = njGetComponentWidth((int)i);
         const int height = njGetComponentHeight((int)i);
@@ -929,8 +1026,17 @@ static sh264e_status_t streaming_init_cache(sh264e_jpeg_stream_context_t *ctx)
         component->rows_per_mcu = (uint32_t)rows_per_mcu;
         component->row0 = 0u;
         component->rows = 0u;
-        bytes = (size_t)stride * (size_t)rows_per_mcu * 2u;
-        component->pixels = (uint8_t *)malloc(bytes);
+        component->cache_rows = streaming_cache_rows_for_slice_window(
+            component->height,
+            i == 0u ? SH264E_V1_HEIGHT : SH264E_V1_HEIGHT / 2u,
+            i == 0u ? SH264E_V1_SLICE_LUMA_HEIGHT : SH264E_V1_SLICE_CHROMA_HEIGHT,
+            component->rows_per_mcu);
+        bytes = (size_t)stride * (size_t)component->cache_rows;
+        if (bytes > (size_t)INT_MAX) {
+            streaming_free_cache(ctx);
+            return SH264E_ERR_UNSUPPORTED_CONFIG;
+        }
+        component->pixels = (uint8_t *)njAllocMem((int)bytes);
         if (component->pixels == NULL) {
             streaming_free_cache(ctx);
             return SH264E_ERR_ALLOCATION_FAILED;
@@ -941,39 +1047,47 @@ static sh264e_status_t streaming_init_cache(sh264e_jpeg_stream_context_t *ctx)
     return SH264E_OK;
 }
 
-static void streaming_copy_current_mcu_row(sh264e_jpeg_stream_context_t *ctx, int mcu_y)
+static sh264e_status_t streaming_copy_current_mcu_row(sh264e_jpeg_stream_context_t *ctx, int mcu_y)
 {
     unsigned i;
 
-    for (i = 0u; i < 3u; i++) {
+    for (i = 0u; i < (unsigned)ctx->component_count; i++) {
         sh264e_jpeg_stream_component_t *component = &ctx->components[i];
         const uint8_t *src = njGetComponentPixels((int)i);
-        const size_t row_bytes = (size_t)component->stride * component->rows_per_mcu;
         const uint32_t new_row0 = (uint32_t)mcu_y * component->rows_per_mcu;
+        uint32_t rows_to_copy = component->rows_per_mcu;
 
-        if (mcu_y == 0) {
-            memcpy(component->pixels, src, row_bytes);
-            component->row0 = 0u;
-            component->rows = component->rows_per_mcu;
-        } else if (mcu_y == 1) {
-            memcpy(component->pixels + row_bytes, src, row_bytes);
-            component->row0 = 0u;
-            component->rows = component->rows_per_mcu * 2u;
-            if (component->rows > component->height) {
-                component->rows = component->height;
-            }
-        } else {
-            memmove(component->pixels,
-                    component->pixels + row_bytes,
-                    row_bytes);
-            memcpy(component->pixels + row_bytes, src, row_bytes);
-            component->row0 = new_row0 - component->rows_per_mcu;
-            component->rows = component->rows_per_mcu * 2u;
-            if (component->row0 + component->rows > component->height) {
-                component->rows = component->height - component->row0;
-            }
+        if (src == NULL || component->pixels == NULL || component->cache_rows < component->rows_per_mcu) {
+            return SH264E_ERR_INTERNAL;
         }
+        if (new_row0 >= component->height) {
+            continue;
+        }
+        if (new_row0 + rows_to_copy > component->height) {
+            rows_to_copy = component->height - new_row0;
+        }
+        if (component->rows != 0u && component->row0 + component->rows != new_row0) {
+            return SH264E_ERR_INTERNAL;
+        }
+        while (component->rows + rows_to_copy > component->cache_rows) {
+            const uint32_t drop_rows = component->rows < component->rows_per_mcu
+                                           ? component->rows
+                                           : component->rows_per_mcu;
+            if (drop_rows == 0u || drop_rows > component->rows) {
+                return SH264E_ERR_INTERNAL;
+            }
+            memmove(component->pixels,
+                    component->pixels + (size_t)drop_rows * (size_t)component->stride,
+                    (size_t)(component->rows - drop_rows) * (size_t)component->stride);
+            component->row0 += drop_rows;
+            component->rows -= drop_rows;
+        }
+        memcpy(component->pixels + (size_t)component->rows * (size_t)component->stride,
+               src,
+               (size_t)rows_to_copy * (size_t)component->stride);
+        component->rows += rows_to_copy;
     }
+    return SH264E_OK;
 }
 
 static int streaming_mcu_row_ready(int mcu_y, void *user)
@@ -990,7 +1104,13 @@ static int streaming_mcu_row_ready(int mcu_y, void *user)
         }
     }
 
-    streaming_copy_current_mcu_row(ctx, mcu_y);
+    ctx->status = streaming_copy_current_mcu_row(ctx, mcu_y);
+    if (ctx->status != SH264E_OK) {
+        return 1;
+    }
+    if (ctx->measure_only) {
+        return 0;
+    }
     if (!ctx->idr_started) {
         size_t bytes = 0u;
         ctx->status = sh264e_begin_idr(ctx->encoder, ctx->out, ctx->out_capacity, &bytes);
@@ -1006,7 +1126,11 @@ static int streaming_mcu_row_ready(int mcu_y, void *user)
         sh264e_slice_t slice;
         size_t bytes = 0u;
 
-        streaming_make_i420_slice(ctx, ctx->next_slice, &slice);
+        if (ctx->encoder->config.pixfmt == SH264E_PIXFMT_I420) {
+            streaming_make_i420_slice(ctx, ctx->next_slice, &slice);
+        } else {
+            streaming_make_nv12_slice(ctx, ctx->next_slice, &slice);
+        }
         ctx->status = sh264e_encode_idr_slice(ctx->encoder, &slice,
                                               ctx->out + ctx->offset,
                                               ctx->out_capacity - ctx->offset,
@@ -2103,14 +2227,54 @@ size_t sh264e_jpeg_get_last_streaming_cache_bytes(void)
     return sh264e_jpeg_streaming_last_cache_bytes;
 }
 
-sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype(sh264e_encoder_t *encoder,
-                                                           const uint8_t *jpeg_data,
-                                                           size_t jpeg_size,
-                                                           uint8_t *work_buffer,
-                                                           size_t work_buffer_capacity,
-                                                           uint8_t *out,
-                                                           size_t out_capacity,
-                                                           size_t *out_size)
+sh264e_status_t sh264e_jpeg_get_streaming_work_size(const uint8_t *jpeg_data,
+                                                    size_t jpeg_size,
+                                                    size_t *out_size)
+{
+    sh264e_jpeg_stream_context_t ctx;
+    sh264e_status_t status;
+
+    if (jpeg_data == NULL || out_size == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    *out_size = 0u;
+    sh264e_jpeg_streaming_last_cache_bytes = 0u;
+    if (jpeg_size == 0u || jpeg_size > (size_t)INT_MAX) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.measure_only = 1;
+    ctx.status = SH264E_OK;
+
+    jpeg_allocation_begin_heap();
+    njInit();
+    status = map_jpeg_result(njDecodeMcuRows(jpeg_data, (int)jpeg_size,
+                                             streaming_mcu_row_ready, &ctx));
+    if (ctx.status != SH264E_OK) {
+        status = ctx.status;
+    }
+    if (status == SH264E_OK) {
+        *out_size = sh264e_jpeg_alloc_peak_arena_bytes;
+    }
+    sh264e_jpeg_streaming_last_cache_bytes = ctx.cache_bytes;
+    streaming_free_cache(&ctx);
+    njDone();
+    jpeg_allocation_end();
+    return status;
+}
+
+static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *encoder,
+                                                             const uint8_t *jpeg_data,
+                                                             size_t jpeg_size,
+                                                             uint8_t *jpeg_arena,
+                                                             size_t jpeg_arena_size,
+                                                             int use_arena,
+                                                             uint8_t *work_buffer,
+                                                             size_t work_buffer_capacity,
+                                                             uint8_t *out,
+                                                             size_t out_capacity,
+                                                             size_t *out_size)
 {
     sh264e_jpeg_stream_context_t ctx;
     sh264e_status_t status;
@@ -2125,10 +2289,10 @@ sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype(sh264e_encoder_t *enc
     if (encoder->idr_active != 0u) {
         return SH264E_ERR_BAD_STATE;
     }
-    if (encoder->config.pixfmt != SH264E_PIXFMT_I420) {
-        return SH264E_ERR_UNSUPPORTED_CONFIG;
-    }
     if (jpeg_size == 0u || jpeg_size > (size_t)INT_MAX) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    if (use_arena != 0 && (jpeg_arena == NULL || jpeg_arena_size == 0u)) {
         return SH264E_ERR_INVALID_ARGUMENT;
     }
     status = sh264e_jpeg_get_slice_buffer_size(&required_work);
@@ -2146,7 +2310,12 @@ sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype(sh264e_encoder_t *enc
     ctx.out_capacity = out_capacity;
     ctx.status = SH264E_OK;
 
-    jpeg_allocation_stats_reset();
+    if (use_arena != 0) {
+        jpeg_allocation_begin_arena(jpeg_arena, jpeg_arena_size);
+    } else {
+        jpeg_allocation_begin_heap();
+    }
+    njInit();
     status = map_jpeg_result(njDecodeMcuRows(jpeg_data, (int)jpeg_size,
                                              streaming_mcu_row_ready, &ctx));
     if (ctx.status != SH264E_OK) {
@@ -2166,10 +2335,43 @@ sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype(sh264e_encoder_t *enc
     if (status != SH264E_OK) {
         reset_progressive_state(encoder);
     }
-    njDone();
     sh264e_jpeg_streaming_last_cache_bytes = ctx.cache_bytes;
     streaming_free_cache(&ctx);
+    njDone();
+    jpeg_allocation_end();
     return status;
+}
+
+sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype(sh264e_encoder_t *encoder,
+                                                           const uint8_t *jpeg_data,
+                                                           size_t jpeg_size,
+                                                           uint8_t *work_buffer,
+                                                           size_t work_buffer_capacity,
+                                                           uint8_t *out,
+                                                           size_t out_capacity,
+                                                           size_t *out_size)
+{
+    return sh264e_encode_jpeg_idr_streaming_impl(encoder, jpeg_data, jpeg_size,
+                                                 NULL, 0u, 0,
+                                                 work_buffer, work_buffer_capacity,
+                                                 out, out_capacity, out_size);
+}
+
+sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype_with_arena(sh264e_encoder_t *encoder,
+                                                                      const uint8_t *jpeg_data,
+                                                                      size_t jpeg_size,
+                                                                      uint8_t *jpeg_arena,
+                                                                      size_t jpeg_arena_size,
+                                                                      uint8_t *work_buffer,
+                                                                      size_t work_buffer_capacity,
+                                                                      uint8_t *out,
+                                                                      size_t out_capacity,
+                                                                      size_t *out_size)
+{
+    return sh264e_encode_jpeg_idr_streaming_impl(encoder, jpeg_data, jpeg_size,
+                                                 jpeg_arena, jpeg_arena_size, 1,
+                                                 work_buffer, work_buffer_capacity,
+                                                 out, out_capacity, out_size);
 }
 
 sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,

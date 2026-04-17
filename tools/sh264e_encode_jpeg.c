@@ -6,6 +6,9 @@
 
 void sh264e_jpeg_set_test_allocation_limit(size_t max_bytes);
 size_t sh264e_jpeg_get_last_streaming_cache_bytes(void);
+sh264e_status_t sh264e_jpeg_get_streaming_work_size(const uint8_t *jpeg_data,
+                                                    size_t jpeg_size,
+                                                    size_t *out_size);
 sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype(sh264e_encoder_t *encoder,
                                                            const uint8_t *jpeg_data,
                                                            size_t jpeg_size,
@@ -14,6 +17,16 @@ sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype(sh264e_encoder_t *enc
                                                            uint8_t *out,
                                                            size_t out_capacity,
                                                            size_t *out_size);
+sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype_with_arena(sh264e_encoder_t *encoder,
+                                                                      const uint8_t *jpeg_data,
+                                                                      size_t jpeg_size,
+                                                                      uint8_t *jpeg_arena,
+                                                                      size_t jpeg_arena_size,
+                                                                      uint8_t *work_buffer,
+                                                                      size_t work_buffer_capacity,
+                                                                      uint8_t *out,
+                                                                      size_t out_capacity,
+                                                                      size_t *out_size);
 
 static void usage(const char *argv0)
 {
@@ -167,15 +180,18 @@ int main(int argc, char **argv)
         fprintf(stderr, "failed to read JPEG input: %s\n", input_path);
         goto done;
     }
-    if (streaming_prototype &&
-        (allocation_limit != (size_t)-1 || arena_shrink != 0u || arena_offset != 0u)) {
-        fprintf(stderr, "--streaming-prototype cannot be combined with allocation test options\n");
+    if (streaming_prototype && allocation_limit != (size_t)-1) {
+        fprintf(stderr, "--streaming-prototype cannot be combined with --test-allocation-limit\n");
         goto done;
     }
-    if (allocation_limit == (size_t)-1 && !streaming_prototype) {
-        status = sh264e_jpeg_get_work_size(jpeg_data, jpeg_size, &jpeg_work_size);
+    if (allocation_limit == (size_t)-1) {
+        if (streaming_prototype) {
+            status = sh264e_jpeg_get_streaming_work_size(jpeg_data, jpeg_size, &jpeg_work_size);
+        } else {
+            status = sh264e_jpeg_get_work_size(jpeg_data, jpeg_size, &jpeg_work_size);
+        }
         if (status != SH264E_OK) {
-            fprintf(stderr, "sh264e_jpeg_get_work_size failed: %s\n", sh264e_status_string(status));
+            fprintf(stderr, "JPEG work-size query failed: %s\n", sh264e_status_string(status));
             goto done;
         }
         jpeg_arena_size = jpeg_work_size;
@@ -206,7 +222,7 @@ int main(int argc, char **argv)
         goto done;
     }
 
-    if (allocation_limit == (size_t)-1 && !streaming_prototype) {
+    if (allocation_limit == (size_t)-1) {
         size_t jpeg_arena_alloc_size = jpeg_arena_size;
 
         if (arena_offset > ((size_t)-1) - jpeg_arena_alloc_size) {
@@ -240,9 +256,11 @@ int main(int argc, char **argv)
                                         work, work_size,
                                         output_buf, output_capacity, &output_size);
     } else if (streaming_prototype) {
-        status = sh264e_encode_jpeg_idr_streaming_prototype(encoder, jpeg_data, jpeg_size,
-                                                            work, work_size,
-                                                            output_buf, output_capacity, &output_size);
+        status = sh264e_encode_jpeg_idr_streaming_prototype_with_arena(
+            encoder, jpeg_data, jpeg_size,
+            jpeg_arena, jpeg_arena_size,
+            work, work_size,
+            output_buf, output_capacity, &output_size);
     } else {
         status = sh264e_encode_jpeg_idr_with_arena(encoder, jpeg_data, jpeg_size,
                                                    jpeg_arena, jpeg_arena_size,

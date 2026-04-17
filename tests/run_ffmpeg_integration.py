@@ -8,6 +8,8 @@ WIDTH = 2560
 HEIGHT = 1440
 SMALL_WIDTH = 1280
 SMALL_HEIGHT = 720
+LARGE_WIDTH = 2560
+LARGE_HEIGHT = 1440
 
 
 def run(cmd):
@@ -189,14 +191,14 @@ def run_case(args, fmt, make_input):
     validate_bitstream(args.ffprobe, args.ffmpeg, bitstream)
 
 
-def make_color_jpeg(args, path, pix_fmt):
+def make_color_jpeg_sized(args, path, pix_fmt, width, height):
     run([
         args.ffmpeg,
         "-y",
         "-f",
         "lavfi",
         "-i",
-        f"testsrc2=size={SMALL_WIDTH}x{SMALL_HEIGHT}:rate=1",
+        f"testsrc2=size={width}x{height}:rate=1",
         "-frames:v",
         "1",
         "-pix_fmt",
@@ -206,6 +208,10 @@ def make_color_jpeg(args, path, pix_fmt):
         str(path),
     ])
     validate_image_pix_fmt(args.ffprobe, path, pix_fmt)
+
+
+def make_color_jpeg(args, path, pix_fmt):
+    make_color_jpeg_sized(args, path, pix_fmt, SMALL_WIDTH, SMALL_HEIGHT)
 
 
 def make_restart_marker_jpeg(args, path):
@@ -268,12 +274,12 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None):
     raise RuntimeError(f"JPEG encoder did not report peak allocation bytes: {result.stdout!r}")
 
 
-def encode_jpeg_streaming_prototype(args, jpeg_input, bitstream):
+def encode_jpeg_streaming_prototype(args, fmt, jpeg_input, bitstream):
     result = run_capture([
         args.jpeg_encoder,
         "--streaming-prototype",
         "--format",
-        "i420",
+        fmt,
         str(jpeg_input),
         str(bitstream),
     ])
@@ -281,11 +287,16 @@ def encode_jpeg_streaming_prototype(args, jpeg_input, bitstream):
         raise RuntimeError(f"streaming JPEG prototype leaked tracked allocations: {result.stdout!r}")
     peak = None
     cache = None
+    work = None
     for line in result.stdout.splitlines():
+        if line.startswith("jpeg work arena bytes:"):
+            work = int(line.rsplit(" ", 1)[1])
         if line.startswith("jpeg peak allocation bytes:"):
             peak = int(line.rsplit(" ", 1)[1])
         if line.startswith("jpeg streaming cache bytes:"):
             cache = int(line.rsplit(" ", 1)[1])
+    if work is None or work == 0:
+        raise RuntimeError(f"streaming JPEG prototype did not report arena work size: {result.stdout!r}")
     if peak is None or peak >= 1382400:
         raise RuntimeError(f"streaming JPEG prototype did not reduce NanoJPEG allocation peak: {result.stdout!r}")
     if cache is None or cache == 0:
@@ -389,23 +400,32 @@ def main():
             encode_jpeg(args, "i420", jpeg_input, offset_arena_output,
                         ["--test-arena-offset", "1"])
             validate_bitstream(args.ffprobe, args.ffmpeg, offset_arena_output)
-        streaming_output = workdir / f"output_jpeg_streaming_{pix_fmt}_i420.h264"
-        encode_jpeg_streaming_prototype(args, jpeg_input, streaming_output)
-        validate_bitstream(args.ffprobe, args.ffmpeg, streaming_output)
         for fmt in ("i420", "nv12"):
             jpeg_output = workdir / f"output_jpeg_{pix_fmt}_{fmt}.h264"
+            streaming_output = workdir / f"output_jpeg_streaming_{pix_fmt}_{fmt}.h264"
             encode_jpeg(args, fmt, jpeg_input, jpeg_output)
+            encode_jpeg_streaming_prototype(args, fmt, jpeg_input, streaming_output)
             validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
-            if fmt == "i420":
-                compare_decoded_i420(args, jpeg_output, streaming_output,
-                                     f"output_jpeg_{pix_fmt}_i420_streaming_compare")
+            validate_bitstream(args.ffprobe, args.ffmpeg, streaming_output)
+            compare_decoded_i420(args, jpeg_output, streaming_output,
+                                 f"output_jpeg_{pix_fmt}_{fmt}_streaming_compare")
+
+    large_jpeg_input = workdir / "input_1440p_yuvj420p.jpg"
+    large_jpeg_output = workdir / "output_jpeg_1440p_yuvj420p_i420.h264"
+    large_streaming_output = workdir / "output_jpeg_streaming_1440p_yuvj420p_i420.h264"
+    make_color_jpeg_sized(args, large_jpeg_input, "yuvj420p", LARGE_WIDTH, LARGE_HEIGHT)
+    encode_jpeg(args, "i420", large_jpeg_input, large_jpeg_output)
+    encode_jpeg_streaming_prototype(args, "i420", large_jpeg_input, large_streaming_output)
+    validate_bitstream(args.ffprobe, args.ffmpeg, large_streaming_output)
+    compare_decoded_i420(args, large_jpeg_output, large_streaming_output,
+                         "output_jpeg_1440p_yuvj420p_i420_streaming_compare")
 
     if args.cjpeg:
         restart_jpeg_input = workdir / "input_720p_yuvj420p_restart.jpg"
         make_restart_marker_jpeg(args, restart_jpeg_input)
         restart_streaming_output = workdir / "output_jpeg_streaming_yuvj420p_restart_i420.h264"
         restart_jpeg_output = workdir / "output_jpeg_yuvj420p_restart_i420.h264"
-        encode_jpeg_streaming_prototype(args, restart_jpeg_input, restart_streaming_output)
+        encode_jpeg_streaming_prototype(args, "i420", restart_jpeg_input, restart_streaming_output)
         validate_bitstream(args.ffprobe, args.ffmpeg, restart_streaming_output)
         encode_jpeg(args, "i420", restart_jpeg_input, restart_jpeg_output)
         validate_bitstream(args.ffprobe, args.ffmpeg, restart_jpeg_output)
@@ -434,8 +454,13 @@ def main():
     # color subsampling fixtures assert exact JPEG component layout.
     for fmt in ("i420", "nv12"):
         grayscale_jpeg_output = workdir / f"output_jpeg_gray_{fmt}.h264"
+        grayscale_streaming_output = workdir / f"output_jpeg_streaming_gray_{fmt}.h264"
         encode_jpeg(args, fmt, grayscale_jpeg_input, grayscale_jpeg_output)
+        encode_jpeg_streaming_prototype(args, fmt, grayscale_jpeg_input, grayscale_streaming_output)
         validate_bitstream(args.ffprobe, args.ffmpeg, grayscale_jpeg_output)
+        validate_bitstream(args.ffprobe, args.ffmpeg, grayscale_streaming_output)
+        compare_decoded_i420(args, grayscale_jpeg_output, grayscale_streaming_output,
+                             f"output_jpeg_gray_{fmt}_streaming_compare")
 
 
 if __name__ == "__main__":
