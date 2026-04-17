@@ -7,6 +7,7 @@ option(SH264E_BUILD_TESTS "Build tests" ON)
 
 add_library(simple_h264_enc_i STATIC
     src/sh264e.c
+    src/nanojpeg.c
 )
 
 target_include_directories(simple_h264_enc_i
@@ -28,6 +29,12 @@ elseif(MSVC)
     target_compile_options(simple_h264_enc_i PRIVATE /W4)
 endif()
 
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    set_source_files_properties(src/nanojpeg.c PROPERTIES
+        COMPILE_OPTIONS "-Wno-conversion;-Wno-shadow"
+    )
+endif()
+
 if(SH264E_BUILD_TOOLS)
     add_executable(sh264e_encode_file
         tools/sh264e_encode_file.c
@@ -46,6 +53,12 @@ if(SH264E_BUILD_TOOLS)
     )
     target_link_libraries(sh264e_resize_encode_progressive PRIVATE simple_h264_enc_i)
     target_compile_features(sh264e_resize_encode_progressive PRIVATE c_std_99)
+
+    add_executable(sh264e_encode_jpeg
+        tools/sh264e_encode_jpeg.c
+    )
+    target_link_libraries(sh264e_encode_jpeg PRIVATE simple_h264_enc_i)
+    target_compile_features(sh264e_encode_jpeg PRIVATE c_std_99)
 
     if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(sh264e_encode_file PRIVATE
@@ -69,10 +82,18 @@ if(SH264E_BUILD_TOOLS)
             -Wconversion
             -Wshadow
         )
+        target_compile_options(sh264e_encode_jpeg PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wshadow
+        )
     elseif(MSVC)
         target_compile_options(sh264e_encode_file PRIVATE /W4)
         target_compile_options(sh264e_encode_file_progressive PRIVATE /W4)
         target_compile_options(sh264e_resize_encode_progressive PRIVATE /W4)
+        target_compile_options(sh264e_encode_jpeg PRIVATE /W4)
     endif()
 endif()
 
@@ -117,6 +138,7 @@ if(SH264E_BUILD_TESTS)
                 --encoder $<TARGET_FILE:sh264e_encode_file>
                 --progressive-encoder $<TARGET_FILE:sh264e_encode_file_progressive>
                 --resize-encoder $<TARGET_FILE:sh264e_resize_encode_progressive>
+                --jpeg-encoder $<TARGET_FILE:sh264e_encode_jpeg>
                 --ffprobe ${SH264E_FFPROBE}
                 --ffmpeg ${SH264E_FFMPEG}
                 --workdir ${CMAKE_CURRENT_BINARY_DIR}/integration
@@ -124,44 +146,73 @@ if(SH264E_BUILD_TESTS)
     endif()
 
     if(SH264E_ARM_NONE_EABI_GCC AND SH264E_QEMU_SYSTEM_ARM)
-        set(SH264E_QEMU_SCALER_ELF ${CMAKE_CURRENT_BINARY_DIR}/sh264e_qemu_scaler_smoke.elf)
-        add_custom_command(
-            OUTPUT ${SH264E_QEMU_SCALER_ELF}
-            COMMAND ${SH264E_ARM_NONE_EABI_GCC}
-                -mcpu=cortex-m3
-                -mthumb
-                -O2
-                -ffreestanding
-                -fno-builtin
-                -ffunction-sections
-                -fdata-sections
-                -I${CMAKE_CURRENT_SOURCE_DIR}/include
-                -T${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_cortexm.ld
-                -nostdlib
-                -Wl,--gc-sections
-                ${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_scaler_smoke.c
-                ${CMAKE_CURRENT_SOURCE_DIR}/src/sh264e.c
-                -lgcc
-                -o ${SH264E_QEMU_SCALER_ELF}
-            DEPENDS
-                ${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_scaler_smoke.c
-                ${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_cortexm.ld
-                ${CMAKE_CURRENT_SOURCE_DIR}/include/sh264e.h
-                ${CMAKE_CURRENT_SOURCE_DIR}/src/sh264e.c
-            VERBATIM
+        function(sh264e_add_qemu_firmware TARGET_NAME SOURCE CPU MACHINE)
+            set(ELF_PATH ${CMAKE_CURRENT_BINARY_DIR}/${TARGET_NAME}.elf)
+            add_custom_command(
+                OUTPUT ${ELF_PATH}
+                COMMAND ${SH264E_ARM_NONE_EABI_GCC}
+                    -mcpu=${CPU}
+                    -mthumb
+                    -O2
+                    -ffreestanding
+                    -fno-builtin
+                    -ffunction-sections
+                    -fdata-sections
+                    -I${CMAKE_CURRENT_SOURCE_DIR}/include
+                    -T${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_cortexm.ld
+                    -nostdlib
+                    -Wl,--gc-sections
+                    ${CMAKE_CURRENT_SOURCE_DIR}/${SOURCE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/sh264e.c
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/nanojpeg.c
+                    -lgcc
+                    -o ${ELF_PATH}
+                DEPENDS
+                    ${CMAKE_CURRENT_SOURCE_DIR}/${SOURCE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_cortexm.ld
+                    ${CMAKE_CURRENT_SOURCE_DIR}/include/sh264e.h
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/sh264e.c
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/nanojpeg.c
+                VERBATIM
+            )
+            add_custom_target(${TARGET_NAME} ALL DEPENDS ${ELF_PATH})
+            add_test(
+                NAME ${TARGET_NAME}
+                COMMAND ${SH264E_QEMU_SYSTEM_ARM}
+                    -M ${MACHINE}
+                    -cpu ${CPU}
+                    -kernel ${ELF_PATH}
+                    -semihosting
+                    -nographic
+                    -monitor none
+                    -serial none
+            )
+            set_tests_properties(${TARGET_NAME} PROPERTIES TIMEOUT 10)
+        endfunction()
+
+        sh264e_add_qemu_firmware(
+            sh264e_qemu_scaler_smoke_m3
+            tests/qemu_scaler_smoke.c
+            cortex-m3
+            mps2-an385
         )
-        add_custom_target(sh264e_qemu_scaler_smoke ALL DEPENDS ${SH264E_QEMU_SCALER_ELF})
-        add_test(
-            NAME sh264e_qemu_scaler_smoke
-            COMMAND ${SH264E_QEMU_SYSTEM_ARM}
-                -M mps2-an385
-                -cpu cortex-m3
-                -kernel ${SH264E_QEMU_SCALER_ELF}
-                -semihosting
-                -nographic
-                -monitor none
-                -serial none
+        sh264e_add_qemu_firmware(
+            sh264e_qemu_scaler_smoke_m4
+            tests/qemu_scaler_smoke.c
+            cortex-m4
+            mps2-an386
         )
-        set_tests_properties(sh264e_qemu_scaler_smoke PROPERTIES TIMEOUT 10)
+        sh264e_add_qemu_firmware(
+            sh264e_qemu_scaler_smoke_m7
+            tests/qemu_scaler_smoke.c
+            cortex-m7
+            mps2-an500
+        )
+        sh264e_add_qemu_firmware(
+            sh264e_qemu_scaler_bench_m4
+            tests/qemu_scaler_bench.c
+            cortex-m4
+            mps2-an386
+        )
     endif()
 endif()

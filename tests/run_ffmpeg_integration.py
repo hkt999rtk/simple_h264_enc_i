@@ -119,6 +119,7 @@ def main():
     parser.add_argument("--encoder", required=True)
     parser.add_argument("--progressive-encoder", required=True)
     parser.add_argument("--resize-encoder", required=True)
+    parser.add_argument("--jpeg-encoder", required=True)
     parser.add_argument("--ffprobe", required=True)
     parser.add_argument("--ffmpeg", required=True)
     parser.add_argument("--workdir", required=True)
@@ -191,6 +192,24 @@ def main():
         str(small_i420),
         str(workdir / "invalid_format.h264"),
     ])
+
+    jpeg_input = workdir / "input_720p.jpg"
+    jpeg_output = workdir / "output_jpeg_i420.h264"
+    run([
+        args.ffmpeg,
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc2=size={SMALL_WIDTH}x{SMALL_HEIGHT}:rate=1",
+        "-frames:v",
+        "1",
+        "-q:v",
+        "3",
+        str(jpeg_input),
+    ])
+    run([args.jpeg_encoder, "--format", "i420", str(jpeg_input), str(jpeg_output)])
+    validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
 
 
 if __name__ == "__main__":

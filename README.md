@@ -13,6 +13,7 @@ This project is intentionally small and narrow in scope:
 * No file I/O inside the encoder library
 * Progressive slice API for lower SRAM footprint and input bandwidth
 * Core fixed-point bilinear scaler for resizing source YUV420 into encoder slices
+* Core memory-input baseline JPEG decode path via NanoJPEG
 
 The encoder is designed for validation and offline experiments, not compression efficiency.
 
@@ -57,6 +58,12 @@ The bilinear resize + progressive encode tool is:
 build/sh264e_resize_encode_progressive
 ```
 
+The JPEG decode + resize + progressive encode tool is:
+
+```text
+build/sh264e_encode_jpeg
+```
+
 ## Test
 
 ```sh
@@ -71,6 +78,7 @@ The test suite covers:
 * library boundary check for forbidden file I/O calls
 * ffmpeg/ffprobe integration when those tools are available
 * Cortex-M QEMU scaler smoke test when `arm-none-eabi-gcc` and `qemu-system-arm` are available
+* Cortex-M QEMU scaler benchmark firmware correctness when those tools are available
 
 ## CLI Example
 
@@ -104,6 +112,18 @@ The resize tool accepts even source dimensions in the bilinear-friendly range:
 
 It reads a full source frame for file-based validation, then calls the library scaler to generate one 2560x16 luma / 8-row chroma output slice at a time and immediately feeds that slice to the progressive encoder.
 The library scaler uses fixed-point bilinear interpolation. When the source is already 2560x1440, `sh264e_resize_make_slice` bypasses scaling and points the output slice directly into the source frame.
+On ARM builds with DSP extension support, the scaler uses an `smlad` guarded path unless `SH264E_DISABLE_ARM_DSP` is defined.
+
+Encode a baseline JPEG memory-input path through the library wrapper:
+
+```sh
+./build/sh264e_encode_jpeg --format i420 input.jpg output.h264
+./build/sh264e_encode_jpeg --format nv12 input.jpg output.h264
+```
+
+The JPEG path uses NanoJPEG inside the core library. The tool only reads the JPEG file; the library API accepts a caller-provided JPEG byte buffer and emits H.264 into a caller-provided output buffer.
+
+For Cortex-M validation, CMake builds QEMU smoke firmware for M3/M4/M7 when the ARM bare-metal toolchain is available. The M4 benchmark firmware records DWT cycle counts in `sh264e_bench_cycles` for real-board measurement.
 
 Validate with ffmpeg:
 
@@ -140,6 +160,11 @@ Resize entry points:
 
 * `sh264e_resize_get_slice_buffer_size`
 * `sh264e_resize_make_slice`
+
+JPEG pipeline entry points:
+
+* `sh264e_jpeg_get_slice_buffer_size`
+* `sh264e_encode_jpeg_idr`
 
 Frame-mode convenience entry points:
 

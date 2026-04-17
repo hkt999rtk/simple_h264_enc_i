@@ -9,6 +9,9 @@ file(GLOB_RECURSE SH264E_LIBRARY_FILES
 
 foreach(path IN LISTS SH264E_LIBRARY_FILES)
     file(READ "${path}" contents)
+    if(path MATCHES "nanojpeg\\.c$")
+        string(REGEX REPLACE "#ifdef[ \t]+_NJ_EXAMPLE_PROGRAM(.|\n)*#endif" "" contents "${contents}")
+    endif()
     foreach(func open read write close fopen fread fwrite fclose)
         if(contents MATCHES "(^|[^A-Za-z0-9_])${func}[ \t\r\n]*\\(")
             message(FATAL_ERROR "Forbidden file I/O call '${func}' found in library file: ${path}")

@@ -102,6 +102,17 @@ sh264e_status_t sh264e_resize_make_slice(const sh264e_frame_t *src_frame,
                                          size_t work_buffer_capacity,
                                          sh264e_slice_t *out_slice);
 
+sh264e_status_t sh264e_jpeg_get_slice_buffer_size(size_t *out_size);
+
+sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
+                                       const uint8_t *jpeg_data,
+                                       size_t jpeg_size,
+                                       uint8_t *work_buffer,
+                                       size_t work_buffer_capacity,
+                                       uint8_t *out,
+                                       size_t out_capacity,
+                                       size_t *out_size);
+
 const char *sh264e_status_string(sh264e_status_t status);
 
 #ifdef __cplusplus

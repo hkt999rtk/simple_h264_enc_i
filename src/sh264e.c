@@ -4,6 +4,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define NJ_OK 0
+#define NJ_NO_JPEG 1
+#define NJ_UNSUPPORTED 2
+#define NJ_OUT_OF_MEM 3
+#define NJ_INTERNAL_ERR 4
+#define NJ_SYNTAX_ERROR 5
+
 #define SH264E_MB_SIZE 16u
 #define SH264E_LUMA_4X4 4u
 #define SH264E_MBS_X (SH264E_V1_WIDTH / SH264E_MB_SIZE)
@@ -16,6 +23,10 @@
 #define SH264E_SCALE_FP_ONE (1u << SH264E_SCALE_FP_BITS)
 #define SH264E_SCALE_FP_HALF (SH264E_SCALE_FP_ONE >> 1u)
 #define SH264E_SCALE_FP_BLEND_ROUND ((uint64_t)1u << ((SH264E_SCALE_FP_BITS * 2u) - 1u))
+
+#if !defined(SH264E_DISABLE_ARM_DSP) && defined(__ARM_FEATURE_DSP) && defined(__GNUC__)
+#define SH264E_USE_ARM_DSP 1
+#endif
 
 typedef struct sh264e_bit_writer_t {
     uint8_t *data;
@@ -49,6 +60,16 @@ typedef struct sh264e_axis_mapper_t {
     uint64_t rem_step;
     uint64_t denom;
 } sh264e_axis_mapper_t;
+
+void njInit(void);
+int njDecode(const void *jpeg, const int size);
+int njGetWidth(void);
+int njGetHeight(void);
+int njIsColor(void);
+unsigned char *njGetImage(void);
+void njDone(void);
+
+static void reset_progressive_state(sh264e_encoder_t *encoder);
 
 static const uint8_t k_luma4x4_x[16] = {
     0, 4, 0, 4, 8, 12, 8, 12, 0, 4, 0, 4, 8, 12, 8, 12
@@ -233,6 +254,32 @@ static sh264e_scale_coord_t scale_coord_from_raw(int64_t raw_pos, uint32_t src_s
     return coord;
 }
 
+#if defined(SH264E_USE_ARM_DSP)
+static int32_t arm_smlad(uint32_t a, uint32_t b, int32_t acc)
+{
+    int32_t result;
+    __asm volatile("smlad %0, %1, %2, %3"
+                   : "=r"(result)
+                   : "r"(a), "r"(b), "r"(acc));
+    return result;
+}
+
+static uint32_t arm_dsp_mul_pair_u8_q16(uint8_t p0, uint32_t w0, uint8_t p1, uint32_t w1)
+{
+    const uint32_t packed_pixels = (uint32_t)p0 | ((uint32_t)p1 << 16u);
+    const uint32_t packed_weights = (w0 & 0xffffu) | ((w1 & 0xffffu) << 16u);
+    int32_t sum = arm_smlad(packed_pixels, packed_weights, 0);
+
+    if (w0 >= 0x8000u) {
+        sum += (int32_t)((uint32_t)p0 << 16u);
+    }
+    if (w1 >= 0x8000u) {
+        sum += (int32_t)((uint32_t)p1 << 16u);
+    }
+    return (uint32_t)sum;
+}
+#endif
+
 static uint8_t bilinear_blend_u8(uint8_t p00,
                                  uint8_t p01,
                                  uint8_t p10,
@@ -242,8 +289,13 @@ static uint8_t bilinear_blend_u8(uint8_t p00,
 {
     const uint32_t inv_wx = SH264E_SCALE_FP_ONE - wx;
     const uint32_t inv_wy = SH264E_SCALE_FP_ONE - wy;
+#if defined(SH264E_USE_ARM_DSP)
+    const uint64_t top = arm_dsp_mul_pair_u8_q16(p00, inv_wx, p01, wx);
+    const uint64_t bottom = arm_dsp_mul_pair_u8_q16(p10, inv_wx, p11, wx);
+#else
     const uint64_t top = (uint64_t)p00 * inv_wx + (uint64_t)p01 * wx;
     const uint64_t bottom = (uint64_t)p10 * inv_wx + (uint64_t)p11 * wx;
+#endif
     const uint64_t blended = top * inv_wy + bottom * wy;
 
     return (uint8_t)((blended + SH264E_SCALE_FP_BLEND_ROUND) >> (SH264E_SCALE_FP_BITS * 2u));
@@ -288,6 +340,227 @@ static uint8_t bilinear_sample_nv12_chroma_mapped(const uint8_t *src,
                              row1[(size_t)x1 * 2u + c],
                              sx.fraction,
                              sy.fraction);
+}
+
+static uint8_t clamp_u8_from_int(int value)
+{
+    if (value < 0) {
+        return 0;
+    }
+    if (value > 255) {
+        return 255;
+    }
+    return (uint8_t)value;
+}
+
+static uint8_t rgb_to_y(uint8_t r, uint8_t g, uint8_t b)
+{
+    return (uint8_t)(((int)r * 77 + (int)g * 150 + (int)b * 29 + 128) >> 8);
+}
+
+static uint8_t rgb_to_u(uint8_t r, uint8_t g, uint8_t b)
+{
+    return clamp_u8_from_int((32768 - (int)r * 43 - (int)g * 85 + (int)b * 128 + 128) >> 8);
+}
+
+static uint8_t rgb_to_v(uint8_t r, uint8_t g, uint8_t b)
+{
+    return clamp_u8_from_int((32768 + (int)r * 128 - (int)g * 107 - (int)b * 21 + 128) >> 8);
+}
+
+static void bilinear_sample_rgb_mapped(const uint8_t *src,
+                                       uint32_t src_width,
+                                       uint32_t src_height,
+                                       int is_color,
+                                       sh264e_scale_coord_t sx,
+                                       sh264e_scale_coord_t sy,
+                                       uint8_t *r,
+                                       uint8_t *g,
+                                       uint8_t *b)
+{
+    if (is_color == 0) {
+        const uint8_t y = bilinear_sample_plane_mapped(src, src_width, src_height,
+                                                       (ptrdiff_t)src_width, sx, sy);
+        *r = y;
+        *g = y;
+        *b = y;
+    } else {
+        const ptrdiff_t stride = (ptrdiff_t)src_width * 3;
+        const uint32_t x0 = sx.index;
+        const uint32_t y0 = sy.index;
+        const uint32_t x1 = x0 + 1u < src_width ? x0 + 1u : x0;
+        const uint32_t y1 = y0 + 1u < src_height ? y0 + 1u : y0;
+        const uint8_t *row0 = src + (size_t)y0 * (size_t)stride;
+        const uint8_t *row1 = src + (size_t)y1 * (size_t)stride;
+        const uint8_t *p00 = row0 + (size_t)x0 * 3u;
+        const uint8_t *p01 = row0 + (size_t)x1 * 3u;
+        const uint8_t *p10 = row1 + (size_t)x0 * 3u;
+        const uint8_t *p11 = row1 + (size_t)x1 * 3u;
+
+        *r = bilinear_blend_u8(p00[0], p01[0], p10[0], p11[0], sx.fraction, sy.fraction);
+        *g = bilinear_blend_u8(p00[1], p01[1], p10[1], p11[1], sx.fraction, sy.fraction);
+        *b = bilinear_blend_u8(p00[2], p01[2], p10[2], p11[2], sx.fraction, sy.fraction);
+    }
+}
+
+static void jpeg_scale_luma_slice(const uint8_t *src,
+                                  uint32_t src_width,
+                                  uint32_t src_height,
+                                  int is_color,
+                                  uint8_t *dst,
+                                  uint32_t dst_y_start)
+{
+    sh264e_axis_mapper_t y_mapper = scale_axis_mapper_init(src_height, SH264E_V1_HEIGHT, dst_y_start);
+    uint32_t y;
+
+    for (y = 0; y < SH264E_V1_SLICE_LUMA_HEIGHT; y++) {
+        uint8_t *dst_row = dst + (size_t)y * SH264E_V1_WIDTH;
+        const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, src_height);
+        sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(src_width, SH264E_V1_WIDTH, 0u);
+        uint32_t x;
+
+        for (x = 0; x < SH264E_V1_WIDTH; x++) {
+            const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, src_width);
+            uint8_t r;
+            uint8_t g;
+            uint8_t b;
+            bilinear_sample_rgb_mapped(src, src_width, src_height, is_color, sx, sy, &r, &g, &b);
+            dst_row[x] = is_color != 0 ? rgb_to_y(r, g, b) : r;
+            scale_axis_mapper_advance(&x_mapper);
+        }
+        scale_axis_mapper_advance(&y_mapper);
+    }
+}
+
+static void jpeg_scale_i420_chroma_slice(const uint8_t *src,
+                                         uint32_t src_width,
+                                         uint32_t src_height,
+                                         int is_color,
+                                         uint8_t *dst_u,
+                                         uint8_t *dst_v,
+                                         uint32_t dst_y_start)
+{
+    sh264e_axis_mapper_t y_mapper = scale_axis_mapper_init(src_height, SH264E_V1_HEIGHT / 2u, dst_y_start);
+    uint32_t y;
+
+    if (is_color == 0) {
+        memset(dst_u, 128, (size_t)SH264E_CHROMA_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT);
+        memset(dst_v, 128, (size_t)SH264E_CHROMA_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT);
+        return;
+    }
+
+    for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
+        uint8_t *u_row = dst_u + (size_t)y * SH264E_CHROMA_WIDTH;
+        uint8_t *v_row = dst_v + (size_t)y * SH264E_CHROMA_WIDTH;
+        const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, src_height);
+        sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(src_width, SH264E_CHROMA_WIDTH, 0u);
+        uint32_t x;
+
+        for (x = 0; x < SH264E_CHROMA_WIDTH; x++) {
+            const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, src_width);
+            uint8_t r;
+            uint8_t g;
+            uint8_t b;
+            bilinear_sample_rgb_mapped(src, src_width, src_height, 1, sx, sy, &r, &g, &b);
+            u_row[x] = rgb_to_u(r, g, b);
+            v_row[x] = rgb_to_v(r, g, b);
+            scale_axis_mapper_advance(&x_mapper);
+        }
+        scale_axis_mapper_advance(&y_mapper);
+    }
+}
+
+static void jpeg_scale_nv12_chroma_slice(const uint8_t *src,
+                                         uint32_t src_width,
+                                         uint32_t src_height,
+                                         int is_color,
+                                         uint8_t *dst_uv,
+                                         uint32_t dst_y_start)
+{
+    sh264e_axis_mapper_t y_mapper = scale_axis_mapper_init(src_height, SH264E_V1_HEIGHT / 2u, dst_y_start);
+    uint32_t y;
+
+    if (is_color == 0) {
+        for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
+            uint32_t x;
+            uint8_t *row = dst_uv + (size_t)y * SH264E_V1_WIDTH;
+            for (x = 0; x < SH264E_CHROMA_WIDTH; x++) {
+                row[(size_t)x * 2u] = 128u;
+                row[(size_t)x * 2u + 1u] = 128u;
+            }
+        }
+        return;
+    }
+
+    for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
+        uint8_t *row = dst_uv + (size_t)y * SH264E_V1_WIDTH;
+        const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, src_height);
+        sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(src_width, SH264E_CHROMA_WIDTH, 0u);
+        uint32_t x;
+
+        for (x = 0; x < SH264E_CHROMA_WIDTH; x++) {
+            const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, src_width);
+            uint8_t r;
+            uint8_t g;
+            uint8_t b;
+            bilinear_sample_rgb_mapped(src, src_width, src_height, 1, sx, sy, &r, &g, &b);
+            row[(size_t)x * 2u] = rgb_to_u(r, g, b);
+            row[(size_t)x * 2u + 1u] = rgb_to_v(r, g, b);
+            scale_axis_mapper_advance(&x_mapper);
+        }
+        scale_axis_mapper_advance(&y_mapper);
+    }
+}
+
+static void jpeg_make_i420_slice(const uint8_t *decoded,
+                                 uint32_t src_width,
+                                 uint32_t src_height,
+                                 int is_color,
+                                 unsigned slice_index,
+                                 uint8_t *work_buffer,
+                                 sh264e_slice_t *slice)
+{
+    uint8_t *dst_y = work_buffer;
+    uint8_t *dst_u = dst_y + (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_LUMA_HEIGHT;
+    uint8_t *dst_v = dst_u + (size_t)SH264E_CHROMA_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT;
+
+    jpeg_scale_luma_slice(decoded, src_width, src_height, is_color, dst_y,
+                          slice_index * SH264E_V1_SLICE_LUMA_HEIGHT);
+    jpeg_scale_i420_chroma_slice(decoded, src_width, src_height, is_color, dst_u, dst_v,
+                                 slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT);
+
+    memset(slice, 0, sizeof(*slice));
+    slice->pixfmt = SH264E_PIXFMT_I420;
+    slice->plane[0] = dst_y;
+    slice->plane[1] = dst_u;
+    slice->plane[2] = dst_v;
+    slice->stride[0] = SH264E_V1_WIDTH;
+    slice->stride[1] = SH264E_CHROMA_WIDTH;
+    slice->stride[2] = SH264E_CHROMA_WIDTH;
+}
+
+static void jpeg_make_nv12_slice(const uint8_t *decoded,
+                                 uint32_t src_width,
+                                 uint32_t src_height,
+                                 int is_color,
+                                 unsigned slice_index,
+                                 uint8_t *work_buffer,
+                                 sh264e_slice_t *slice)
+{
+    uint8_t *dst_y = work_buffer;
+    uint8_t *dst_uv = dst_y + (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_LUMA_HEIGHT;
+
+    jpeg_scale_luma_slice(decoded, src_width, src_height, is_color, dst_y,
+                          slice_index * SH264E_V1_SLICE_LUMA_HEIGHT);
+    jpeg_scale_nv12_chroma_slice(decoded, src_width, src_height, is_color, dst_uv,
+                                 slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT);
+
+    memset(slice, 0, sizeof(*slice));
+    slice->pixfmt = SH264E_PIXFMT_NV12;
+    slice->plane[0] = dst_y;
+    slice->plane[1] = dst_uv;
+    slice->stride[0] = SH264E_V1_WIDTH;
+    slice->stride[1] = SH264E_V1_WIDTH;
 }
 
 static void resize_scale_plane_slice(const uint8_t *src,
@@ -1021,6 +1294,23 @@ static sh264e_status_t make_idr_slice(sh264e_encoder_t *encoder,
     return append_annexb_nalu(out, capacity, offset, 0x65u, encoder->rbsp, bw_size(&bw));
 }
 
+static sh264e_status_t map_jpeg_result(int result)
+{
+    switch (result) {
+    case NJ_OK:
+        return SH264E_OK;
+    case NJ_OUT_OF_MEM:
+        return SH264E_ERR_ALLOCATION_FAILED;
+    case NJ_INTERNAL_ERR:
+        return SH264E_ERR_INTERNAL;
+    case NJ_NO_JPEG:
+    case NJ_UNSUPPORTED:
+    case NJ_SYNTAX_ERROR:
+    default:
+        return SH264E_ERR_UNSUPPORTED_CONFIG;
+    }
+}
+
 sh264e_status_t sh264e_resize_get_slice_buffer_size(const sh264e_frame_t *src_frame, size_t *out_size)
 {
     sh264e_status_t status;
@@ -1077,6 +1367,115 @@ sh264e_status_t sh264e_resize_make_slice(const sh264e_frame_t *src_frame,
     } else {
         resize_make_nv12_slice(src_frame, slice_index, work_buffer, out_slice);
     }
+    return SH264E_OK;
+}
+
+sh264e_status_t sh264e_jpeg_get_slice_buffer_size(size_t *out_size)
+{
+    if (out_size == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    *out_size = resize_scaled_slice_buffer_size();
+    return SH264E_OK;
+}
+
+sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
+                                       const uint8_t *jpeg_data,
+                                       size_t jpeg_size,
+                                       uint8_t *work_buffer,
+                                       size_t work_buffer_capacity,
+                                       uint8_t *out,
+                                       size_t out_capacity,
+                                       size_t *out_size)
+{
+    sh264e_status_t status;
+    size_t required_work = 0;
+    size_t offset = 0;
+    size_t bytes = 0;
+    uint32_t width;
+    uint32_t height;
+    int is_color;
+    const uint8_t *decoded;
+    unsigned slice_index;
+
+    if (encoder == NULL || jpeg_data == NULL || work_buffer == NULL ||
+        out == NULL || out_size == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    *out_size = 0;
+    if (encoder->idr_active != 0u) {
+        return SH264E_ERR_BAD_STATE;
+    }
+    if (jpeg_size == 0u || jpeg_size > (size_t)INT_MAX) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    status = sh264e_jpeg_get_slice_buffer_size(&required_work);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    if (work_buffer_capacity < required_work) {
+        return SH264E_ERR_BUFFER_TOO_SMALL;
+    }
+
+    njInit();
+    status = map_jpeg_result(njDecode(jpeg_data, (int)jpeg_size));
+    if (status != SH264E_OK) {
+        njDone();
+        return status;
+    }
+    if (njGetWidth() <= 0 || njGetHeight() <= 0) {
+        njDone();
+        return SH264E_ERR_UNSUPPORTED_CONFIG;
+    }
+    width = (uint32_t)njGetWidth();
+    height = (uint32_t)njGetHeight();
+    if (width < SH264E_RESIZE_MIN_SRC_WIDTH ||
+        width > SH264E_RESIZE_MAX_SRC_WIDTH ||
+        height < SH264E_RESIZE_MIN_SRC_HEIGHT ||
+        height > SH264E_RESIZE_MAX_SRC_HEIGHT ||
+        (width & 1u) != 0u ||
+        (height & 1u) != 0u) {
+        njDone();
+        return SH264E_ERR_UNSUPPORTED_CONFIG;
+    }
+
+    decoded = njGetImage();
+    is_color = njIsColor();
+    status = sh264e_begin_idr(encoder, out, out_capacity, &bytes);
+    if (status != SH264E_OK) {
+        reset_progressive_state(encoder);
+        njDone();
+        return status;
+    }
+    offset += bytes;
+
+    for (slice_index = 0; slice_index < SH264E_MBS_Y; slice_index++) {
+        sh264e_slice_t slice;
+
+        if (encoder->config.pixfmt == SH264E_PIXFMT_I420) {
+            jpeg_make_i420_slice(decoded, width, height, is_color, slice_index, work_buffer, &slice);
+        } else {
+            jpeg_make_nv12_slice(decoded, width, height, is_color, slice_index, work_buffer, &slice);
+        }
+
+        status = sh264e_encode_idr_slice(encoder, &slice, out + offset, out_capacity - offset, &bytes);
+        if (status != SH264E_OK) {
+            reset_progressive_state(encoder);
+            njDone();
+            return status;
+        }
+        offset += bytes;
+    }
+
+    status = sh264e_end_idr(encoder);
+    if (status != SH264E_OK) {
+        reset_progressive_state(encoder);
+        njDone();
+        return status;
+    }
+
+    njDone();
+    *out_size = offset;
     return SH264E_OK;
 }
 

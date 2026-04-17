@@ -91,6 +91,8 @@ Required API entry points:
 * `sh264e_get_max_output_size`
 * `sh264e_resize_get_slice_buffer_size`
 * `sh264e_resize_make_slice`
+* `sh264e_jpeg_get_slice_buffer_size`
+* `sh264e_encode_jpeg_idr`
 
 Required public API concepts:
 
@@ -103,7 +105,7 @@ Required public API concepts:
 
 The output bitstream buffer is provided by the caller. The library reports bytes written or returns a buffer-too-small error.
 
-Progressive slice mode is the preferred v1 library interface. Frame mode (`sh264e_encode_idr`) remains available as a convenience wrapper around progressive mode. The resize API is part of the core library and produces encoder-sized progressive slices from supported YUV420 source frames.
+Progressive slice mode is the preferred v1 library interface. Frame mode (`sh264e_encode_idr`) remains available as a convenience wrapper around progressive mode. The resize API is part of the core library and produces encoder-sized progressive slices from supported YUV420 source frames. The JPEG API is also part of the core library and decodes memory-input baseline JPEG before resize and IDR encode.
 
 ---
 
@@ -279,6 +281,8 @@ Source sample indices are clamped at image boundaries.
 
 The library scaler implementation must use fixed-point integer arithmetic for coordinate mapping and bilinear interpolation. The inner pixel loops should avoid division so the path remains suitable for ARM Cortex-M class CPUs.
 
+When compiled for ARM cores with the DSP extension, the bilinear horizontal blend may use `smlad`/DSP intrinsics or inline assembly behind a compile-time guard. Defining `SH264E_DISABLE_ARM_DSP` must force the portable C path.
+
 ### Progressive Encoder Integration
 
 Tools may read a full source frame for file-based validation, but the library resize output side is progressive.
@@ -295,6 +299,53 @@ For each encoder slice, the scaler produces:
   * UV: **2560 x 8**
 
 Each scaled output slice is passed directly to `sh264e_encode_idr_slice`.
+
+---
+
+## 2.5 Core JPEG Decode + Resize + Encode API
+
+The project includes NanoJPEG in the core static library for a direct pipeline:
+
+```
+JPEG byte buffer
+   ↓
+NanoJPEG baseline decode
+   ↓
+RGB or grayscale source image
+   ↓
+Fixed-point bilinear resize into one encoder slice
+   ↓
+H.264 IDR slice encode
+```
+
+### Library API
+
+```
+sh264e_jpeg_get_slice_buffer_size
+sh264e_encode_jpeg_idr
+```
+
+The JPEG API accepts a caller-provided JPEG byte buffer and a caller-provided H.264 output buffer. File I/O remains outside the library.
+
+NanoJPEG decodes baseline JPEG into an internal RGB or grayscale image. The library then scales that decoded image directly into one YUV420 encoder slice at a time:
+
+* I420 encoder config: Y, U, and V slice planes
+* NV12 encoder config: Y and interleaved UV slice planes
+
+The JPEG source dimensions must satisfy the same resize limits:
+
+* Width: **1280..5120**, even
+* Height: **720..2880**, even
+
+The JPEG path is intended for validation and direct camera/snapshot encode use. NanoJPEG is not thread-safe, so the v1 JPEG API should be treated as single-call-at-a-time.
+
+### Tool Command
+
+```
+sh264e_encode_jpeg --format i420|nv12 input.jpg output.h264
+```
+
+The tool is only a file I/O wrapper around the library JPEG pipeline.
 
 ---
 
@@ -475,6 +526,7 @@ The generated bitstream must:
 ### 9.1 Functional Test
 
 * Encode 1 frame → output `.h264`
+* Decode 1 baseline JPEG from memory → resize → output `.h264`
 * Verify output structure:
 
   ```
@@ -520,7 +572,8 @@ Validate:
 * 1:1 resize reports zero work-buffer bytes and bypasses copy
 * Scaled resize reports non-zero work-buffer bytes and emits encoder-sized slices
 * Invalid resize dimensions fail
-* Cortex-M QEMU scaler smoke test passes when the ARM bare-metal toolchain and QEMU are available
+* Cortex-M3/M4/M7 QEMU scaler smoke tests pass when the ARM bare-metal toolchain and QEMU are available
+* Cortex-M4 QEMU scaler benchmark firmware passes correctness checks
 
 ---
 
