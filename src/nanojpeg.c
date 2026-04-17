@@ -137,6 +137,12 @@ void njInit(void);
 // Return value: The error code in case of failure, or NJ_OK (zero) on success.
 nj_result_t njDecode(const void* jpeg, const int size);
 
+// njDecodeComponents: Decode a JPEG image into internal component planes only.
+// This skips chroma upsampling and RGB output allocation/conversion for color
+// JPEGs. Component plane accessors below expose the decoded Y/Cb/Cr or
+// grayscale planes, including their native dimensions and stride.
+nj_result_t njDecodeComponents(const void* jpeg, const int size);
+
 // njGetWidth: Return the width (in pixels) of the most recently decoded
 // image. If njDecode() failed, the result of njGetWidth() is undefined.
 int njGetWidth(void);
@@ -163,6 +169,12 @@ unsigned char* njGetImage(void);
 // by njGetImage(). If njDecode() failed, the result of njGetImageSize() is
 // undefined.
 int njGetImageSize(void);
+
+int njGetComponentCount(void);
+const unsigned char* njGetComponentPixels(int index);
+int njGetComponentWidth(int index);
+int njGetComponentHeight(int index);
+int njGetComponentStride(int index);
 
 // njDone: Uninitialize NanoJPEG.
 // Resets NanoJPEG's internal state and frees all memory that has been
@@ -327,6 +339,7 @@ typedef struct _nj_ctx {
     int block[64];
     int rstinterval;
     unsigned char *rgb;
+    int decode_components_only;
 } nj_context_t;
 
 static nj_context_t nj;
@@ -567,7 +580,7 @@ NJ_INLINE void njDecodeSOF(void) {
         if (((c->width < 3) && (c->ssx != ssxmax)) || ((c->height < 3) && (c->ssy != ssymax))) njThrow(NJ_UNSUPPORTED);
         if (!(c->pixels = (unsigned char*) njAllocMem(c->stride * nj.mbheight * c->ssy << 3))) njThrow(NJ_OUT_OF_MEM);
     }
-    if (nj.ncomp == 3) {
+    if ((nj.ncomp == 3) && !nj.decode_components_only) {
         nj.rgb = (unsigned char*) njAllocMem(nj.width * nj.height * nj.ncomp);
         if (!nj.rgb) njThrow(NJ_OUT_OF_MEM);
     }
@@ -877,8 +890,9 @@ void njDone(void) {
     njInit();
 }
 
-nj_result_t njDecode(const void* jpeg, const int size) {
+static nj_result_t njDecodeInternal(const void* jpeg, const int size, int components_only) {
     njDone();
+    nj.decode_components_only = components_only;
     nj.pos = (const unsigned char*) jpeg;
     nj.size = size & 0x7FFFFFFF;
     if (nj.size < 2) return NJ_NO_JPEG;
@@ -903,8 +917,16 @@ nj_result_t njDecode(const void* jpeg, const int size) {
     }
     if (nj.error != __NJ_FINISHED) return nj.error;
     nj.error = NJ_OK;
-    njConvert();
+    if (!nj.decode_components_only) njConvert();
     return nj.error;
+}
+
+nj_result_t njDecode(const void* jpeg, const int size) {
+    return njDecodeInternal(jpeg, size, 0);
+}
+
+nj_result_t njDecodeComponents(const void* jpeg, const int size) {
+    return njDecodeInternal(jpeg, size, 1);
 }
 
 int njGetWidth(void)            { return nj.width; }
@@ -912,5 +934,22 @@ int njGetHeight(void)           { return nj.height; }
 int njIsColor(void)             { return (nj.ncomp != 1); }
 unsigned char* njGetImage(void) { return (nj.ncomp == 1) ? nj.comp[0].pixels : nj.rgb; }
 int njGetImageSize(void)        { return nj.width * nj.height * nj.ncomp; }
+int njGetComponentCount(void)   { return nj.ncomp; }
+const unsigned char* njGetComponentPixels(int index) {
+    if ((index < 0) || (index >= nj.ncomp)) return NULL;
+    return nj.comp[index].pixels;
+}
+int njGetComponentWidth(int index) {
+    if ((index < 0) || (index >= nj.ncomp)) return 0;
+    return nj.comp[index].width;
+}
+int njGetComponentHeight(int index) {
+    if ((index < 0) || (index >= nj.ncomp)) return 0;
+    return nj.comp[index].height;
+}
+int njGetComponentStride(int index) {
+    if ((index < 0) || (index >= nj.ncomp)) return 0;
+    return nj.comp[index].stride;
+}
 
 #endif // _NJ_INCLUDE_HEADER_ONLY
