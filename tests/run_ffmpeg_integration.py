@@ -305,6 +305,8 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
     command.extend(["--format", fmt, str(jpeg_input), str(bitstream)])
     result = run_capture(command)
     one_shot_output = extra_args is not None and "--test-one-shot-output" in extra_args
+    heap_wrapper_output = extra_args is not None and "--test-allocation-limit" in extra_args
+    one_shot_h264_output = one_shot_output or heap_wrapper_output
     if "jpeg current allocation bytes: 0" not in result.stdout:
         raise RuntimeError(f"JPEG encoder did not release tracked allocations: {result.stdout!r}")
     if "jpeg work arena bytes:" not in result.stdout:
@@ -337,7 +339,7 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
         raise RuntimeError(
             f"JPEG encoder default path used full component-plane memory: got peak {peak}, limit {max_peak_bytes}"
         )
-    if not one_shot_output:
+    if not one_shot_h264_output:
         output_buffer = parse_jpeg_metric(result.stdout, "jpeg output buffer bytes:")
         if output_buffer != H264_OUTPUT_CHUNK_BYTES:
             raise RuntimeError(
@@ -361,7 +363,7 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
         output_buffer = parse_jpeg_metric(result.stdout, "jpeg output buffer bytes:")
         if output_buffer != H264_ONE_SHOT_OUTPUT_BYTES:
             raise RuntimeError(
-                f"JPEG one-shot output capacity changed: got {output_buffer}, expected {H264_ONE_SHOT_OUTPUT_BYTES}"
+                f"JPEG one-shot H.264 output capacity changed: got {output_buffer}, expected {H264_ONE_SHOT_OUTPUT_BYTES}"
             )
 
 
@@ -588,6 +590,15 @@ def main():
                 max_peak_bytes=FULL_COMPONENT_BYTES_1440P_420,
                 expected_work_bytes=PRODUCTION_MEMORY_1440P_420["work"],
                 expected_peak_bytes=PRODUCTION_MEMORY_1440P_420["peak"])
+    large_heap_wrapper_output = workdir / "output_jpeg_heap_wrapper_1440p_yuvj420p_i420.h264"
+    encode_jpeg(args, "i420", large_jpeg_input, large_heap_wrapper_output,
+                ["--test-allocation-limit", "999999999"],
+                expected_cache_bytes=STREAMING_CACHE_BYTES_1440P_420,
+                max_peak_bytes=FULL_COMPONENT_BYTES_1440P_420,
+                expected_peak_bytes=PRODUCTION_MEMORY_1440P_420["peak"])
+    validate_bitstream(args.ffprobe, args.ffmpeg, large_heap_wrapper_output)
+    if large_heap_wrapper_output.read_bytes() != large_jpeg_output.read_bytes():
+        raise RuntimeError("JPEG heap wrapper bitstream differs from arena streaming output")
     if EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420 != 434_320:
         raise RuntimeError(
             "2560x1440 JPEG streaming memory subtotal changed: "
