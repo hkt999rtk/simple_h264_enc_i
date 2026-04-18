@@ -385,6 +385,32 @@ without constructing an encoder. The current report is 191,048 bytes total:
 reconstructed luma slice storage, 20,480 bytes of reconstructed chroma slice
 storage, and 2,560 bytes of neighbor/nonzero state.
 
+## Embedded Production Profile
+
+The recommended firmware-facing production profile builds only the static
+library and disables tests, tools, and private JPEG hooks:
+
+```sh
+cmake -S . -B build-prod \
+  -DSH264E_BUILD_TOOLS=OFF \
+  -DSH264E_BUILD_TESTS=OFF \
+  -DSH264E_ENABLE_JPEG_TEST_HOOKS=OFF
+cmake --build build-prod
+```
+
+Production symbol inspection should show public encode and diagnostic/stat APIs
+but no private JPEG test hooks or NanoJPEG full-image decode entry points:
+
+```sh
+nm -g build-prod/libsimple_h264_enc_i.a | rg "sh264e_jpeg_set_test|streaming_prototype|njDecode([^A-Za-z0-9_]|$)|njDecodeComponents|njGetImage|njGetImageSize|njIsColor" && exit 1 || true
+nm -g build-prod/libsimple_h264_enc_i.a | rg "sh264e_jpeg_get_last_(allocation_stats|streaming_cache_bytes|slice_work_bytes)|sh264e_encoder_get_memory_report"
+```
+
+The normal CTest suite includes `sh264e_production_profile_symbols` when `nm` or
+`llvm-nm` is available. That test configures this production profile, builds the
+library, verifies tools/tests are absent, confirms the public diagnostic APIs,
+and rejects private JPEG hooks plus NanoJPEG full-image decode symbols.
+
 NanoJPEG decodes baseline JPEG through MCU-row streaming. The library scales decoded component rows directly into one YUV420 encoder slice at a time:
 
 For `2560x1440` 4:2:0 source JPEGs encoded to the fixed target, the JPEG path

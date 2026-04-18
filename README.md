@@ -34,6 +34,28 @@ cmake -S . -B build
 cmake --build build
 ```
 
+Embedded production builds should compile only the static library and leave
+private JPEG fault-injection/prototype hooks disabled:
+
+```sh
+cmake -S . -B build-prod \
+  -DSH264E_BUILD_TOOLS=OFF \
+  -DSH264E_BUILD_TESTS=OFF \
+  -DSH264E_ENABLE_JPEG_TEST_HOOKS=OFF
+cmake --build build-prod
+```
+
+The intended production symbol surface can be audited with:
+
+```sh
+nm -g build-prod/libsimple_h264_enc_i.a | rg "sh264e_jpeg_set_test|streaming_prototype|njDecode([^A-Za-z0-9_]|$)|njDecodeComponents|njGetImage|njGetImageSize|njIsColor" && exit 1 || true
+nm -g build-prod/libsimple_h264_enc_i.a | rg "sh264e_jpeg_get_last_(allocation_stats|streaming_cache_bytes|slice_work_bytes)|sh264e_encoder_get_memory_report"
+```
+
+The first command must find no private test hooks or NanoJPEG full-image decode
+symbols. The second command documents the public diagnostic/stat APIs that stay
+available in production for memory reporting.
+
 The main library target is:
 
 ```text
@@ -79,6 +101,7 @@ The test suite covers:
 * ffmpeg/ffprobe integration when those tools are available
 * Cortex-M QEMU scaler smoke tests when `arm-none-eabi-gcc` and `qemu-system-arm` are available and usable
 * Cortex-M QEMU scaler benchmark firmware correctness for default DSP-capable and portable C variants when those tools are available and usable
+* production-profile symbol audit when `nm` or `llvm-nm` is available
 
 ## CLI Example
 
@@ -201,10 +224,16 @@ JPEG pipeline entry points:
 * `sh264e_jpeg_get_slice_buffer_size`
 * `sh264e_jpeg_get_slice_work_size`
 * `sh264e_jpeg_get_work_size`
-* `sh264e_jpeg_get_last_allocation_stats`
 * `sh264e_encode_jpeg_idr`
 * `sh264e_encode_jpeg_idr_with_arena`
 * `sh264e_encode_jpeg_idr_with_arena_stream`
+
+Diagnostic/stat entry points:
+
+* `sh264e_jpeg_get_last_allocation_stats`
+* `sh264e_jpeg_get_last_streaming_cache_bytes`
+* `sh264e_jpeg_get_last_slice_work_bytes`
+* `sh264e_encoder_get_memory_report`
 
 Frame-mode convenience entry points:
 

@@ -108,6 +108,12 @@ color-subsampling coverage that fails if the production arena path regresses to
 full component-plane allocation or if the default JPEG tool path regresses to
 allocating `sh264e_get_max_output_size()` for H.264 output.
 
+The normal CTest suite also includes `sh264e_production_profile_symbols` when
+`nm` or `llvm-nm` is available. That check configures the embedded production
+profile with tools, tests, and JPEG test hooks disabled, then verifies the
+public diagnostic/stat APIs remain exported while private hooks and NanoJPEG
+full-image decode symbols stay absent.
+
 The expected closeout is stricter: every public JPEG API, including the
 heap-backed one-shot wrapper, must use MCU-row streaming and must not touch the
 old full decoded component-frame path. Regression coverage should fail if

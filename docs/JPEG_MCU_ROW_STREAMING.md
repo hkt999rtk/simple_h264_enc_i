@@ -158,6 +158,21 @@ streaming prototype entry points are declared in
 `SH264E_ENABLE_JPEG_TEST_HOOKS=1`. Production builds should leave those hooks
 disabled.
 
+The embedded production profile keeps that boundary explicit:
+
+```sh
+cmake -S . -B build-prod \
+  -DSH264E_BUILD_TOOLS=OFF \
+  -DSH264E_BUILD_TESTS=OFF \
+  -DSH264E_ENABLE_JPEG_TEST_HOOKS=OFF
+cmake --build build-prod
+nm -g build-prod/libsimple_h264_enc_i.a | rg "sh264e_jpeg_set_test|streaming_prototype|njDecode([^A-Za-z0-9_]|$)|njDecodeComponents|njGetImage|njGetImageSize|njIsColor" && exit 1 || true
+```
+
+Normal CTest runs include a production-profile symbol audit when `nm` or
+`llvm-nm` is available, so hook leakage and NanoJPEG full-image decode exports
+fail before firmware integration.
+
 ## Validation
 
 The expected validation command is:
