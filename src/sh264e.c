@@ -665,6 +665,35 @@ static uint8_t bilinear_blend_u8(uint8_t p00,
     return (uint8_t)((blended + SH264E_SCALE_FP_BLEND_ROUND) >> (SH264E_SCALE_FP_BITS * 2u));
 }
 
+static uint8_t bilinear_blend_quarter_u8(uint8_t p00,
+                                         uint8_t p01,
+                                         uint8_t p10,
+                                         uint8_t p11,
+                                         unsigned wx_quarters,
+                                         unsigned wy_quarters)
+{
+    const unsigned inv_wx = 4u - wx_quarters;
+    const unsigned inv_wy = 4u - wy_quarters;
+#if defined(SH264E_USE_ARM_DSP)
+    const uint32_t packed_x_weights = (uint32_t)inv_wx | ((uint32_t)wx_quarters << 16u);
+    const uint32_t top = (uint32_t)arm_smlad((uint32_t)p00 | ((uint32_t)p01 << 16u),
+                                             packed_x_weights,
+                                             0);
+    const uint32_t bottom = (uint32_t)arm_smlad((uint32_t)p10 | ((uint32_t)p11 << 16u),
+                                                packed_x_weights,
+                                                0);
+    const uint32_t vertical = (uint32_t)arm_smlad(top | (bottom << 16u),
+                                                  (uint32_t)inv_wy | ((uint32_t)wy_quarters << 16u),
+                                                  0);
+#else
+    const uint32_t top = (uint32_t)p00 * inv_wx + (uint32_t)p01 * wx_quarters;
+    const uint32_t bottom = (uint32_t)p10 * inv_wx + (uint32_t)p11 * wx_quarters;
+    const uint32_t vertical = top * inv_wy + bottom * wy_quarters;
+#endif
+
+    return (uint8_t)((vertical + 8u) >> 4u);
+}
+
 static uint8_t bilinear_sample_plane_mapped(const uint8_t *src,
                                             uint32_t src_width,
                                             uint32_t src_height,
@@ -680,6 +709,26 @@ static uint8_t bilinear_sample_plane_mapped(const uint8_t *src,
     const uint8_t *row1 = src + (size_t)y1 * (size_t)src_stride;
 
     return bilinear_blend_u8(row0[x0], row0[x1], row1[x0], row1[x1], sx.fraction, sy.fraction);
+}
+
+static uint8_t bilinear_sample_plane_quarter(const uint8_t *src,
+                                             uint32_t src_width,
+                                             uint32_t src_height,
+                                             ptrdiff_t src_stride,
+                                             sh264e_scale_coord_t sx,
+                                             sh264e_scale_coord_t sy)
+{
+    const uint32_t x0 = sx.index;
+    const uint32_t y0 = sy.index;
+    const uint32_t x1 = x0 + 1u < src_width ? x0 + 1u : x0;
+    const uint32_t y1 = y0 + 1u < src_height ? y0 + 1u : y0;
+    const uint8_t *row0 = src + (size_t)y0 * (size_t)src_stride;
+    const uint8_t *row1 = src + (size_t)y1 * (size_t)src_stride;
+    const unsigned wx_quarters = sx.fraction >> (SH264E_SCALE_FP_BITS - 2u);
+    const unsigned wy_quarters = sy.fraction >> (SH264E_SCALE_FP_BITS - 2u);
+
+    return bilinear_blend_quarter_u8(row0[x0], row0[x1], row1[x0], row1[x1],
+                                     wx_quarters, wy_quarters);
 }
 
 static uint8_t bilinear_sample_nv12_chroma_mapped(const uint8_t *src,
@@ -704,6 +753,32 @@ static uint8_t bilinear_sample_nv12_chroma_mapped(const uint8_t *src,
                              row1[(size_t)x1 * 2u + c],
                              sx.fraction,
                              sy.fraction);
+}
+
+static uint8_t bilinear_sample_nv12_chroma_quarter(const uint8_t *src,
+                                                   uint32_t src_width,
+                                                   uint32_t src_height,
+                                                   ptrdiff_t src_stride,
+                                                   unsigned component,
+                                                   sh264e_scale_coord_t sx,
+                                                   sh264e_scale_coord_t sy)
+{
+    const uint32_t x0 = sx.index;
+    const uint32_t y0 = sy.index;
+    const uint32_t x1 = x0 + 1u < src_width ? x0 + 1u : x0;
+    const uint32_t y1 = y0 + 1u < src_height ? y0 + 1u : y0;
+    const uint8_t *row0 = src + (size_t)y0 * (size_t)src_stride;
+    const uint8_t *row1 = src + (size_t)y1 * (size_t)src_stride;
+    const size_t c = component;
+    const unsigned wx_quarters = sx.fraction >> (SH264E_SCALE_FP_BITS - 2u);
+    const unsigned wy_quarters = sy.fraction >> (SH264E_SCALE_FP_BITS - 2u);
+
+    return bilinear_blend_quarter_u8(row0[(size_t)x0 * 2u + c],
+                                     row0[(size_t)x1 * 2u + c],
+                                     row1[(size_t)x0 * 2u + c],
+                                     row1[(size_t)x1 * 2u + c],
+                                     wx_quarters,
+                                     wy_quarters);
 }
 
 static int exact_scale_ratio_mode(uint32_t src_width,
@@ -1388,7 +1463,9 @@ static void resize_scale_plane_slice(const uint8_t *src,
             const sh264e_scale_coord_t sx = exact_mode != 0 ?
                                             exact_scale_coord(exact_mode, x, dst_width, src_width) :
                                             scale_coord_from_raw(x_mapper.pos, src_width);
-            dst_row[x] = bilinear_sample_plane_mapped(src, src_width, src_height, src_stride, sx, sy);
+            dst_row[x] = exact_mode != 0
+                             ? bilinear_sample_plane_quarter(src, src_width, src_height, src_stride, sx, sy)
+                             : bilinear_sample_plane_mapped(src, src_width, src_height, src_stride, sx, sy);
             if (exact_mode == 0) {
                 scale_axis_mapper_advance(&x_mapper);
             }
@@ -1434,20 +1511,36 @@ static void resize_scale_nv12_chroma_slice(const uint8_t *src_uv,
                                                               SH264E_CHROMA_WIDTH,
                                                               src_chroma_width) :
                                             scale_coord_from_raw(x_mapper.pos, src_chroma_width);
-            dst_row[(size_t)x * 2u] = bilinear_sample_nv12_chroma_mapped(src_uv,
-                                                                         src_chroma_width,
-                                                                         src_chroma_height,
-                                                                         src_stride,
-                                                                         0u,
-                                                                         sx,
-                                                                         sy);
-            dst_row[(size_t)x * 2u + 1u] = bilinear_sample_nv12_chroma_mapped(src_uv,
+            dst_row[(size_t)x * 2u] = exact_mode != 0
+                                          ? bilinear_sample_nv12_chroma_quarter(src_uv,
+                                                                               src_chroma_width,
+                                                                               src_chroma_height,
+                                                                               src_stride,
+                                                                               0u,
+                                                                               sx,
+                                                                               sy)
+                                          : bilinear_sample_nv12_chroma_mapped(src_uv,
                                                                               src_chroma_width,
                                                                               src_chroma_height,
                                                                               src_stride,
-                                                                              1u,
+                                                                              0u,
                                                                               sx,
                                                                               sy);
+            dst_row[(size_t)x * 2u + 1u] = exact_mode != 0
+                                               ? bilinear_sample_nv12_chroma_quarter(src_uv,
+                                                                                    src_chroma_width,
+                                                                                    src_chroma_height,
+                                                                                    src_stride,
+                                                                                    1u,
+                                                                                    sx,
+                                                                                    sy)
+                                               : bilinear_sample_nv12_chroma_mapped(src_uv,
+                                                                                   src_chroma_width,
+                                                                                   src_chroma_height,
+                                                                                   src_stride,
+                                                                                   1u,
+                                                                                   sx,
+                                                                                   sy);
             if (exact_mode == 0) {
                 scale_axis_mapper_advance(&x_mapper);
             }
