@@ -199,16 +199,15 @@ slice work buffer as the component-plane path.
 
 The production memory regression report in
 `docs/JPEG_STREAMING_MEMORY_REPORT.md` records the measured default arena path:
-`1280x720` 4:2:0 uses 616,616 bytes of JPEG work arena and `2560x1440` 4:2:0
-uses 770,216 bytes, including the dynamic NanoJPEG VLC table block.
+`1280x720` 4:2:0 uses 92,304 bytes of JPEG work arena and `2560x1440` 4:2:0
+uses 245,904 bytes.
 
 That arena size is no longer dominated by decoded image storage. The
-`2560x1440` 4:2:0 row cache is 184,320 bytes, while the dynamic NanoJPEG VLC
-tables account for 524,288 bytes of the 770,048-byte tracked peak allocation.
-Issue #31 tracks replacing the 16-bit SRAM VLC tables with compact Huffman
-decode and optional XIP-friendly standard-Huffman tables. The target is to bring
-the same production path below 270 KiB peak allocation while keeping the
-184,320-byte row cache stable.
+`2560x1440` 4:2:0 row cache is 184,320 bytes. Issue #31 replaced the previous
+524,288-byte 16-bit SRAM VLC table block with compact canonical Huffman metadata
+and a small configurable fast table, bringing the same production path to
+245,760 bytes of tracked peak allocation while keeping the 184,320-byte row
+cache stable.
 
 ## Validation Plan
 

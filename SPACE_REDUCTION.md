@@ -222,11 +222,12 @@ NanoJPEG originally stored four fully expanded Huffman/VLC decode tables inside
 its static global context. For Cortex-M builds, that made `src/nanojpeg.c`
 reserve about 525 KiB of fixed BSS before any JPEG was decoded.
 
-The selected production-safe tradeoff is to allocate those VLC tables through
-the existing `njAllocMem` shim the first time a DHT marker is decoded. This
-keeps the public JPEG encode API unchanged and lets the heap-backed and
-caller-provided arena paths account for the table memory in the same way they
-already account for decoded component planes and row caches.
+The first production-safe tradeoff allocated those VLC tables through the
+existing `njAllocMem` shim, which removed fixed BSS but moved the same 524,288
+bytes into per-decode heap/arena peak. Issue #31 replaces that interim model
+with compact canonical Huffman metadata and a small configurable fast table
+inside the NanoJPEG context. This keeps the public JPEG encode API unchanged,
+keeps custom DHT support, and avoids the 524 KiB caller-arena allocation.
 
 Measured with:
 
@@ -238,14 +239,14 @@ arm-none-eabi-size -A nanojpeg.o
 
 | Build mode | `.text` | `.bss` | Notes |
 | --- | ---: | ---: | --- |
-| Static VLC tables, `NJ_DYNAMIC_VLC=0` | 5,920 | 525,036 | Original fixed SRAM model |
-| Dynamic VLC tables, default `NJ_DYNAMIC_VLC=1` | 5,864 | 752 | VLC tables move to tracked JPEG allocation |
+| Former static VLC tables, `NJ_DYNAMIC_VLC=0` | 5,920 | 525,036 | Original fixed SRAM model |
+| Former dynamic VLC tables, `NJ_DYNAMIC_VLC=1` | 5,864 | 752 | VLC tables moved to tracked JPEG allocation |
+| Compact Huffman, default `NJ_VLC_FAST_BITS=8` | 6,320 | 4,492 | No 524 KiB VLC arena allocation |
 
-The dynamic table block is `4 * 65,536 * sizeof(nj_vlc_code_t)`, currently
-524,288 bytes. This increases per-decode heap/arena work size by that amount,
-but removes it from fixed BSS and makes placement explicit for embedded
-integrations. Builds that prefer the original static allocation/speed tradeoff
-can compile NanoJPEG with `NJ_DYNAMIC_VLC=0`.
+The removed expanded table block was `4 * 65,536 * sizeof(nj_vlc_code_t)`, or
+524,288 bytes. The compact decoder instead stores canonical min/max ranges,
+symbol order, and an `NJ_VLC_FAST_BITS` short-code table for each JPEG Huffman
+table, with canonical fallback for longer codes.
 
 Scan startup tracks which DHT/VLC tables were actually decoded and rejects
 abbreviated JPEG input before entropy decoding if SOS references a missing
@@ -310,27 +311,25 @@ path no longer requires the previous full decoded component planes:
 
 | Source JPEG | Previous full component planes | Production arena work | Production peak allocation | Streaming row cache |
 | --- | ---: | ---: | ---: | ---: |
-| 1280x720 4:2:0 | 1,382,400 | 616,616 | 616,448 | 61,440 |
-| 2560x1440 4:2:0 | 5,529,600 | 770,216 | 770,048 | 184,320 |
+| 1280x720 4:2:0 | 1,382,400 | 92,304 | 92,160 | 61,440 |
+| 2560x1440 4:2:0 | 5,529,600 | 245,904 | 245,760 | 184,320 |
 
-The production peak includes the dynamically allocated NanoJPEG VLC table block,
-which is now caller-arena-accounted instead of fixed BSS.
+The production peak no longer includes the previous 524,288-byte NanoJPEG VLC
+lookup block. NanoJPEG stores compact canonical Huffman metadata in its decoder
+context and uses a small `NJ_VLC_FAST_BITS` fast table plus canonical fallback
+for longer codes.
 
 Current `2560x1440` 4:2:0 production peak allocation breaks down as:
 
 | Block | Bytes |
 | --- | ---: |
-| Dynamic NanoJPEG VLC tables | 524,288 |
 | Streaming retained row cache | 184,320 |
 | NanoJPEG MCU-row temp buffers | 61,440 |
-| Total tracked peak allocation | 770,048 |
+| Total tracked peak allocation | 245,760 |
 
-The row streaming work met the decoded-image cache target. The remaining arena
-peak is dominated by the 16-bit VLC lookup tables. The next memory reduction
-step is tracked by issue #31: replace those SRAM tables with compact Huffman
-decode and, optionally, an XIP-friendly standard-Huffman fast path. The target
-is to reduce `2560x1440` 4:2:0 production peak allocation below 270 KiB without
-regressing to full component-plane decode.
+Issue #31 reduced the `2560x1440` 4:2:0 production peak below the 270 KiB target
+without increasing the 184,320-byte row cache or regressing to full
+component-plane decode.
 
 ### Current Production Boundary
 

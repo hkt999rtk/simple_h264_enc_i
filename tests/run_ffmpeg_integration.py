@@ -24,13 +24,13 @@ FULL_COMPONENT_BYTES_720P = {
 }
 FULL_COMPONENT_BYTES_1440P_420 = 5_529_600
 PRODUCTION_MEMORY_720P_420 = {
-    "work": 616_616,
-    "peak": 616_448,
+    "work": 92_304,
+    "peak": 92_160,
     "cache": STREAMING_CACHE_BYTES_720P["yuvj420p"],
 }
 PRODUCTION_MEMORY_1440P_420 = {
-    "work": 770_216,
-    "peak": 770_048,
+    "work": 245_904,
+    "peak": 245_760,
     "cache": STREAMING_CACHE_BYTES_1440P_420,
 }
 
