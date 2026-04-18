@@ -330,12 +330,12 @@ int main(void)
         fprintf(stderr, "progressive max output size returned zero\n");
         ok = 0;
     }
-    if (encoder_memory_report.context_bytes != 72u ||
+    if (encoder_memory_report.context_bytes != 40u ||
         encoder_memory_report.bitstream_scratch_bytes != 2048u ||
         encoder_memory_report.recon_luma_bytes != 0u ||
         encoder_memory_report.recon_chroma_bytes != 0u ||
         encoder_memory_report.neighbor_state_bytes != 0u ||
-        encoder_memory_report.total_bytes != 2120u) {
+        encoder_memory_report.total_bytes != 2088u) {
         fprintf(stderr,
                 "unexpected encoder memory report: context=%zu bitstream=%zu "
                 "luma=%zu chroma=%zu neighbor=%zu total=%zu\n",

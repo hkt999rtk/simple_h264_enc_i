@@ -20,12 +20,7 @@
 #define SH264E_LUMA_4X4 4u
 #define SH264E_MBS_X (SH264E_V1_WIDTH / SH264E_MB_SIZE)
 #define SH264E_MBS_Y (SH264E_V1_HEIGHT / SH264E_MB_SIZE)
-#define SH264E_LUMA4_X (SH264E_V1_WIDTH / SH264E_LUMA_4X4)
-#define SH264E_SLICE_LUMA4_Y (SH264E_V1_SLICE_LUMA_HEIGHT / SH264E_LUMA_4X4)
 #define SH264E_CHROMA_WIDTH (SH264E_V1_WIDTH / 2u)
-#define SH264E_MB_LUMA_BYTES (SH264E_MB_SIZE * SH264E_MB_SIZE)
-#define SH264E_MB_CHROMA_BYTES ((SH264E_MB_SIZE / 2u) * (SH264E_MB_SIZE / 2u))
-#define SH264E_MB_LUMA4_X (SH264E_MB_SIZE / SH264E_LUMA_4X4)
 #define SH264E_MAX_IDR_MB_RBSP_SIZE 2048u
 #define SH264E_MAX_IDR_MB_NALU_OUTPUT_SIZE \
     (SH264E_MAX_IDR_MB_RBSP_SIZE + (SH264E_MAX_IDR_MB_RBSP_SIZE / 2u) + 4u)
@@ -63,10 +58,6 @@ struct sh264e_encoder_t {
     sh264e_config_t config;
     uint8_t *rbsp;
     size_t rbsp_capacity;
-    uint8_t *recon_y;
-    uint8_t *recon_u;
-    uint8_t *recon_v;
-    uint8_t *nz_luma;
     unsigned flags;
     unsigned slices_encoded;
 };
@@ -75,13 +66,6 @@ typedef struct sh264e_scale_coord_t {
     uint32_t index;
     uint32_t fraction;
 } sh264e_scale_coord_t;
-
-typedef struct sh264e_mb_predictor_t {
-    uint8_t recon_y[SH264E_MB_LUMA_BYTES];
-    uint8_t recon_u[SH264E_MB_CHROMA_BYTES];
-    uint8_t recon_v[SH264E_MB_CHROMA_BYTES];
-    uint8_t nz_luma[SH264E_MB_LUMA4_X * SH264E_MB_LUMA4_X];
-} sh264e_mb_predictor_t;
 
 typedef struct sh264e_axis_mapper_t {
     int64_t pos;
@@ -1794,17 +1778,6 @@ static sh264e_status_t make_pps(sh264e_encoder_t *encoder,
     return append_annexb_nalu(out, capacity, offset, 0x68u, encoder->rbsp, rbsp_size);
 }
 
-static int clip_u8(int value)
-{
-    if (value < 0) {
-        return 0;
-    }
-    if (value > 255) {
-        return 255;
-    }
-    return value;
-}
-
 static int dequant_effective_scale(int qp)
 {
     const int rem = qp % 6;
@@ -1815,24 +1788,6 @@ static int dequant_effective_scale(int qp)
         return scale << (qbits - 4);
     }
     return (scale + (1 << (3 - qbits))) >> (4 - qbits);
-}
-
-static int inverse_dc_residual(int level, int qp)
-{
-    const int rem = qp % 6;
-    const int qbits = qp / 6;
-    const int scale = k_dequant_dc_scale[rem];
-    int transformed;
-
-    if (level == 0) {
-        return 0;
-    }
-    if (qbits >= 4) {
-        transformed = level * scale * (1 << (qbits - 4));
-    } else {
-        transformed = (level * scale + (1 << (3 - qbits))) >> (4 - qbits);
-    }
-    return (transformed + 32) >> 6;
 }
 
 static int quantize_dc_delta(int delta, int qp)
@@ -1861,34 +1816,6 @@ static int quantize_dc_delta(int delta, int qp)
     return level;
 }
 
-static int predict_luma_dc(const sh264e_mb_predictor_t *predictor, unsigned x, unsigned y)
-{
-    unsigned i;
-    int sum = 0;
-    const int have_top = y > 0u;
-    const int have_left = x > 0u;
-
-    if (!have_top && !have_left) {
-        return 128;
-    }
-    if (have_top) {
-        const uint8_t *top = predictor->recon_y + ((size_t)y - 1u) * SH264E_MB_SIZE + x;
-        for (i = 0; i < 4u; i++) {
-            sum += top[i];
-        }
-    }
-    if (have_left) {
-        const uint8_t *left = predictor->recon_y + (size_t)y * SH264E_MB_SIZE + x - 1u;
-        for (i = 0; i < 4u; i++) {
-            sum += left[(size_t)i * SH264E_MB_SIZE];
-        }
-    }
-    if (have_top && have_left) {
-        return (sum + 4) >> 3;
-    }
-    return (sum + 2) >> 2;
-}
-
 static const uint8_t *slice_luma_row(const sh264e_slice_t *slice, unsigned y)
 {
     return slice->plane[0] + (size_t)y * (size_t)slice->stride[0];
@@ -1903,7 +1830,6 @@ static uint8_t slice_chroma_sample(const sh264e_slice_t *slice, unsigned plane, 
 }
 
 static int encode_luma4x4(sh264e_encoder_t *encoder,
-                          sh264e_mb_predictor_t *predictor,
                           const sh264e_slice_t *slice,
                           unsigned mb_x,
                           unsigned x,
@@ -1913,9 +1839,8 @@ static int encode_luma4x4(sh264e_encoder_t *encoder,
     unsigned col;
     int sum_delta = 0;
     const unsigned src_x = mb_x * SH264E_MB_SIZE + x;
-    const int pred = predict_luma_dc(predictor, x, y);
+    const int pred = 128;
     int level;
-    int recon_delta;
 
     for (row = 0; row < 4u; row++) {
         const uint8_t *src = slice_luma_row(slice, y + row) + src_x;
@@ -1925,48 +1850,11 @@ static int encode_luma4x4(sh264e_encoder_t *encoder,
     }
 
     level = quantize_dc_delta((sum_delta + (sum_delta >= 0 ? 8 : -8)) / 16, encoder->config.qp);
-    recon_delta = inverse_dc_residual(level, encoder->config.qp);
-
-    for (row = 0; row < 4u; row++) {
-        uint8_t *dst = predictor->recon_y + (size_t)(y + row) * SH264E_MB_SIZE + x;
-        for (col = 0; col < 4u; col++) {
-            dst[col] = (uint8_t)clip_u8(pred + recon_delta);
-        }
-    }
 
     return level;
 }
 
-static int predict_chroma_dc(const uint8_t *recon, unsigned x, unsigned y)
-{
-    unsigned i;
-    int sum = 0;
-    const int have_top = y > 0u;
-    const int have_left = x > 0u;
-
-    if (!have_top && !have_left) {
-        return 128;
-    }
-    if (have_top) {
-        const uint8_t *top = recon + ((size_t)y - 1u) * (SH264E_MB_SIZE / 2u) + x;
-        for (i = 0; i < 8u; i++) {
-            sum += top[i];
-        }
-    }
-    if (have_left) {
-        const uint8_t *left = recon + (size_t)y * (SH264E_MB_SIZE / 2u) + x - 1u;
-        for (i = 0; i < 8u; i++) {
-            sum += left[(size_t)i * (SH264E_MB_SIZE / 2u)];
-        }
-    }
-    if (have_top && have_left) {
-        return (sum + 8) >> 4;
-    }
-    return (sum + 4) >> 3;
-}
-
 static int encode_chroma8x8_dc(sh264e_encoder_t *encoder,
-                               sh264e_mb_predictor_t *predictor,
                                const sh264e_slice_t *slice,
                                unsigned plane,
                                unsigned mb_x,
@@ -1976,10 +1864,8 @@ static int encode_chroma8x8_dc(sh264e_encoder_t *encoder,
     unsigned row;
     unsigned col;
     int sum_delta = 0;
-    uint8_t *recon = plane == 1u ? predictor->recon_u : predictor->recon_v;
-    const int pred = predict_chroma_dc(recon, x, y);
+    const int pred = 128;
     int level;
-    int recon_delta;
     const unsigned src_x = mb_x * (SH264E_MB_SIZE / 2u) + x;
 
     for (row = 0; row < 8u; row++) {
@@ -1993,14 +1879,6 @@ static int encode_chroma8x8_dc(sh264e_encoder_t *encoder,
         level = 1;
     } else if (level < 0) {
         level = -1;
-    }
-    recon_delta = inverse_dc_residual(level, encoder->config.qp);
-
-    for (row = 0; row < 8u; row++) {
-        uint8_t *dst = recon + (size_t)(y + row) * (SH264E_MB_SIZE / 2u) + x;
-        for (col = 0; col < 8u; col++) {
-            dst[col] = (uint8_t)clip_u8(pred + recon_delta);
-        }
     }
 
     return level;
@@ -2018,25 +1896,6 @@ static unsigned cavlc_coeff_token_table_for_nc(unsigned nC)
         return 2u;
     }
     return 3u;
-}
-
-static unsigned predict_luma_nc(const sh264e_mb_predictor_t *predictor, unsigned block_x, unsigned block_y)
-{
-    unsigned nC = 0u;
-    unsigned neighbors = 0u;
-
-    if (block_x > 0u) {
-        nC += predictor->nz_luma[(size_t)block_y * SH264E_MB_LUMA4_X + block_x - 1u];
-        neighbors++;
-    }
-    if (block_y > 0u) {
-        nC += predictor->nz_luma[((size_t)block_y - 1u) * SH264E_MB_LUMA4_X + block_x];
-        neighbors++;
-    }
-    if (neighbors == 2u) {
-        return (nC + 1u) >> 1u;
-    }
-    return nC;
 }
 
 static void write_coeff_token_one_or_zero(sh264e_bit_writer_t *bw, int has_coeff, unsigned nC)
@@ -2142,18 +2001,12 @@ static void write_chroma_dc_residual(sh264e_bit_writer_t *bw, int level)
     bw_write_bit(bw, 1);                 /* total_zeros = 0 for TotalCoeff=1 */
 }
 
-static void set_luma_nz(sh264e_mb_predictor_t *predictor, unsigned block_x, unsigned block_y, uint8_t nz)
-{
-    predictor->nz_luma[(size_t)block_y * SH264E_MB_LUMA4_X + block_x] = nz;
-}
-
 static sh264e_status_t write_idr_mb_slice_rbsp(sh264e_encoder_t *encoder,
                                                const sh264e_slice_t *slice,
                                                unsigned row_index,
                                                unsigned mb_x,
                                                size_t *out_rbsp_size)
 {
-    sh264e_mb_predictor_t predictor;
     sh264e_bit_writer_t bw;
     int levels[16];
     int chroma_dc[2];
@@ -2161,10 +2014,6 @@ static sh264e_status_t write_idr_mb_slice_rbsp(sh264e_encoder_t *encoder,
     unsigned cbp_luma = 0;
     unsigned cbp_chroma;
     unsigned cbp;
-
-    memset(&predictor, 0, sizeof(predictor));
-    memset(predictor.recon_u, 128, sizeof(predictor.recon_u));
-    memset(predictor.recon_v, 128, sizeof(predictor.recon_v));
 
     bw_init(&bw, encoder->rbsp, encoder->rbsp_capacity);
 
@@ -2182,18 +2031,15 @@ static sh264e_status_t write_idr_mb_slice_rbsp(sh264e_encoder_t *encoder,
     for (b = 0; b < 16u; b++) {
         const unsigned x = k_luma4x4_x[b];
         const unsigned y = k_luma4x4_y[b];
-        const int level = encode_luma4x4(encoder, &predictor, slice, mb_x, x, y);
-        const unsigned block_x = x / 4u;
-        const unsigned block_y = y / 4u;
+        const int level = encode_luma4x4(encoder, slice, mb_x, x, y);
         levels[b] = level;
-        set_luma_nz(&predictor, block_x, block_y, level != 0 ? 1u : 0u);
         if (level != 0) {
             cbp_luma |= 1u << (b / 4u);
         }
     }
 
-    chroma_dc[0] = encode_chroma8x8_dc(encoder, &predictor, slice, 1u, mb_x, 0u, 0u);
-    chroma_dc[1] = encode_chroma8x8_dc(encoder, &predictor, slice, 2u, mb_x, 0u, 0u);
+    chroma_dc[0] = encode_chroma8x8_dc(encoder, slice, 1u, mb_x, 0u, 0u);
+    chroma_dc[1] = encode_chroma8x8_dc(encoder, slice, 2u, mb_x, 0u, 0u);
     cbp_chroma = (chroma_dc[0] != 0 || chroma_dc[1] != 0) ? 1u : 0u;
     cbp = cbp_luma + cbp_chroma * 16u;
 
@@ -2208,10 +2054,7 @@ static sh264e_status_t write_idr_mb_slice_rbsp(sh264e_encoder_t *encoder,
         bw_write_se(&bw, 0);                     /* mb_qp_delta */
         for (b = 0; b < 16u; b++) {
             if ((cbp_luma & (1u << (b / 4u))) != 0u) {
-                const unsigned x = k_luma4x4_x[b];
-                const unsigned y = k_luma4x4_y[b];
-                write_luma_residual_dc_only(&bw, levels[b],
-                                            predict_luma_nc(&predictor, x / 4u, y / 4u));
+                write_luma_residual_dc_only(&bw, levels[b], 0u);
             }
         }
         if (cbp_chroma != 0u) {
@@ -2954,10 +2797,6 @@ void sh264e_encoder_destroy(sh264e_encoder_t *encoder)
     }
     if ((encoder->flags & SH264E_ENCODER_FLAG_OWNS_MEMORY) != 0u) {
         free(encoder->rbsp);
-        free(encoder->recon_y);
-        free(encoder->recon_u);
-        free(encoder->recon_v);
-        free(encoder->nz_luma);
         free(encoder);
     }
 }

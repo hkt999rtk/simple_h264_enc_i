@@ -12,15 +12,15 @@ instance reports:
 
 | Block | Bytes | Notes |
 | --- | ---: | --- |
-| Encoder context/config | 72 | `sh264e_encoder_t` host-side control structure |
+| Encoder context/config | 40 | `sh264e_encoder_t` host-side control structure |
 | Bitstream scratch | 2,048 | Internal RBSP workspace for one macroblock-slice NALU |
-| Reconstructed luma slice | 0 | One-MB local predictor state lives on the stack |
-| Reconstructed chroma slices | 0 | One-MB local predictor state lives on the stack |
-| Neighbor/nonzero state | 0 | One-MB local nonzero state lives on the stack |
-| Total encoder memory | 2,120 | Sum of the rows above |
-| Caller-provided encoder arena | 2,127 | Total plus worst-case control-structure alignment padding |
+| Reconstructed luma slice | 0 | Fixed unavailable-neighbor prediction uses no reconstructed storage |
+| Reconstructed chroma slices | 0 | Fixed unavailable-neighbor prediction uses no reconstructed storage |
+| Neighbor/nonzero state | 0 | CAVLC `nC` is fixed to 0 |
+| Total encoder memory | 2,088 | Sum of the rows above |
+| Caller-provided encoder arena | 2,095 | Total plus worst-case control-structure alignment padding |
 
-The measured current 64-bit host total is `2,120` bytes. The removed row-level
+The measured current 64-bit host total is `2,088` bytes. The removed row-level
 state accounts for the 64,000-byte reduction from the previous 191,048-byte
 baseline, with an additional bitstream scratch reduction because the RBSP
 workspace now only needs to hold one macroblock slice.
@@ -65,9 +65,9 @@ it. `sh264e_encoder_destroy` resets no caller memory and does not free the arena
 The JPEG tool prints the same report:
 
 ```text
-encoder memory total bytes: 2120
-encoder arena work bytes: 2127
-encoder context bytes: 72
+encoder memory total bytes: 2088
+encoder arena work bytes: 2095
+encoder context bytes: 40
 encoder bitstream scratch bytes: 2048
 encoder recon luma bytes: 0
 encoder recon chroma bytes: 0

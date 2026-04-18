@@ -166,10 +166,10 @@ path reduces retained row cache to 61,440 bytes and requires 0 bytes of
 caller slice work for I420 or 20,480 bytes for NV12.
 `sh264e_encoder_get_memory_report` reports the fixed-v1 encoder heap breakdown
 without creating an encoder; `docs/ENCODER_MEMORY_REPORT.md` records the current
-2,120-byte total and sub-block composition.
+2,088-byte total and sub-block composition.
 Embedded integrations can call `sh264e_encoder_get_work_size` and
 `sh264e_encoder_create_with_arena` to place the same encoder state in a
-caller-provided arena. The fixed-v1 arena size is currently 2,127 bytes,
+caller-provided arena. The fixed-v1 arena size is currently 2,095 bytes,
 including worst-case control-structure alignment padding; `sh264e_encoder_destroy`
 does not free caller-owned arena memory.
 The arena-backed production path now uses MCU-row streaming by default. It keeps only NanoJPEG's current MCU-row buffers and the retained row cache, then feeds one scaled output slice at a time to the progressive encoder.

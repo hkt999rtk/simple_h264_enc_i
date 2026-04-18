@@ -425,12 +425,12 @@ by the last JPEG encode. These are diagnostic/stat APIs for regression reporting
 streaming-prototype hooks remain private test hooks gated by
 `SH264E_ENABLE_JPEG_TEST_HOOKS`.
 `sh264e_encoder_get_memory_report` reports fixed-v1 encoder-owned memory
-without constructing an encoder. The current report is 2,120 bytes total:
-72 bytes of context/config and 2,048 bytes of one-macroblock RBSP scratch. The
+without constructing an encoder. The current report is 2,088 bytes total:
+40 bytes of context/config and 2,048 bytes of one-macroblock RBSP scratch. The
 row reconstructed luma/chroma slice storage and row neighbor/nonzero state are
 not retained in the encoder arena.
 `sh264e_encoder_get_work_size` reports the caller-provided arena requirement for
-the same fixed-v1 encoder state, currently 2,127 bytes including worst-case
+the same fixed-v1 encoder state, currently 2,095 bytes including worst-case
 alignment padding. `sh264e_encoder_create_with_arena` constructs an encoder in
 that caller-owned block; `sh264e_encoder_destroy` does not free arena memory.
 
@@ -496,7 +496,7 @@ Macroblock Partition (16x16)
    ↓
 Independent MB Slice Partition (one H.264 slice per MB)
    ↓
-One-MB-Local Prediction (no row-neighbor reference)
+Fixed Unavailable-Neighbor Prediction
    ↓
 Residual Calculation
    ↓
@@ -527,7 +527,7 @@ NALU Packaging
 
 #### Supported Modes:
 
-* **Independent one-macroblock slice prediction only**
+* **Fixed unavailable-neighbor DC-style prediction only**
 
 #### Rules:
 
@@ -537,8 +537,9 @@ NALU Packaging
 * Encoder must not read or write row-level reconstructed-neighbor samples.
 * Encoder must not retain reconstructed luma/chroma row slice buffers for
   prediction.
-* Encoder may keep temporary per-macroblock predictor state on the stack so
-  intra-4x4 dependencies inside the same macroblock slice match decoder syntax.
+* Encoder must not retain temporary reconstructed-neighbor state inside a
+  macroblock slice.
+* CAVLC luma residual coding uses fixed `nC = 0` in independent-MB mode.
 
 ---
 
