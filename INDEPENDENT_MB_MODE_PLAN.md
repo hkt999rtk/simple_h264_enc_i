@@ -15,6 +15,11 @@ independent macroblock slices:
 This is a deliberate Cortex-M tradeoff. The encoder is intended to be simple,
 deterministic, and low-memory rather than compression efficient.
 
+Issue #63 implements the bitstream shape and memory removal in this plan. The
+implementation keeps only per-macroblock predictor/nonzero state on the stack so
+the existing intra-4x4 CAVLC syntax remains decoder-compatible inside each
+one-macroblock slice; it does not retain row-level reconstructed-neighbor state.
+
 ## Current Baseline
 
 The current progressive input API consumes one macroblock row per call:
@@ -101,13 +106,13 @@ slice NALU. The clearer terminology is:
 
 Target encoder behavior:
 
-* no luma reconstructed-neighbor prediction
-* no chroma reconstructed-neighbor prediction
-* no reconstructed pixel writeback
+* no row-level luma reconstructed-neighbor prediction
+* no row-level chroma reconstructed-neighbor prediction
+* no reconstructed pixel writeback outside temporary one-MB stack state
 * no reconstructed slice buffer clears
-* fixed unavailable-neighbor intra behavior, effectively using the decoder's
-  boundary predictor
-* CAVLC `nC` fixed to 0 because no neighbor nonzero context is available
+* unavailable macroblock-neighbor intra behavior at each one-MB slice boundary
+* CAVLC context must not read row-level neighbor state; temporary within-MB
+  context may be used when required by the chosen syntax
 
 The residual path may remain DC-only:
 
@@ -217,6 +222,7 @@ Memory expectations:
 * encoder neighbor state bytes report as 0 or disappear
 * total encoder arena size drops by about 64,000 bytes before considering any
   bitstream scratch reductions
+* implemented encoder arena size is 2,127 bytes on the current 64-bit host
 
 ## Non-Goals
 

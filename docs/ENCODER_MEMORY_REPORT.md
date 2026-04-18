@@ -1,11 +1,9 @@
 # Encoder Memory Report
 
-Issue #50 records the fixed-v1 encoder heap breakdown used by the memory
-optimization roadmap.
-
-This report is the pre-independent-MB baseline. The planned independent
-macroblock slice mode should remove reconstructed-neighbor prediction and make
-the reconstructed luma/chroma and neighbor/nonzero blocks unnecessary.
+Issue #50 originally recorded the fixed-v1 encoder heap breakdown used by the
+memory optimization roadmap. Issue #63 changes the fixed-v1 encoder to
+independent one-macroblock IDR slices, removing row-level reconstructed-neighbor
+state from the encoder arena.
 
 ## Fixed V1 Breakdown
 
@@ -15,19 +13,21 @@ instance reports:
 | Block | Bytes | Notes |
 | --- | ---: | --- |
 | Encoder context/config | 72 | `sh264e_encoder_t` host-side control structure |
-| Bitstream scratch | 126,976 | Internal RBSP workspace sized by `sh264e_get_max_slice_output_size` |
-| Reconstructed luma slice | 40,960 | `2560 * 16` slice-local reconstructed luma |
-| Reconstructed chroma slices | 20,480 | U and V, each `1280 * 8` |
-| Neighbor/nonzero state | 2,560 | 4x4 luma nonzero state for one slice |
-| Total encoder memory | 191,048 | Sum of the rows above |
-| Caller-provided encoder arena | 191,055 | Total plus worst-case control-structure alignment padding |
+| Bitstream scratch | 2,048 | Internal RBSP workspace for one macroblock-slice NALU |
+| Reconstructed luma slice | 0 | One-MB local predictor state lives on the stack |
+| Reconstructed chroma slices | 0 | One-MB local predictor state lives on the stack |
+| Neighbor/nonzero state | 0 | One-MB local nonzero state lives on the stack |
+| Total encoder memory | 2,120 | Sum of the rows above |
+| Caller-provided encoder arena | 2,127 | Total plus worst-case control-structure alignment padding |
 
-The previously documented `about 191,024` byte budget was an estimate. The
-measured current 64-bit host total is `191,048` bytes.
+The measured current 64-bit host total is `2,120` bytes. The removed row-level
+state accounts for the 64,000-byte reduction from the previous 191,048-byte
+baseline, with an additional bitstream scratch reduction because the RBSP
+workspace now only needs to hold one macroblock slice.
 
-## Independent-MB Target
+## Independent-MB Result
 
-The independent macroblock slice mode should eliminate these blocks:
+The independent macroblock slice mode eliminates these blocks:
 
 | Block | Current bytes | Target |
 | --- | ---: | ---: |
@@ -37,8 +37,8 @@ The independent macroblock slice mode should eliminate these blocks:
 | Removable subtotal | 64,000 | 0 |
 
 The target bitstream emits one H.264 slice per macroblock so the decoder treats
-left/top macroblocks as unavailable. Encoder-side reconstructed-neighbor
-prediction and CAVLC neighbor context are therefore removed.
+left/top macroblocks as unavailable. Encoder-side row reconstructed-neighbor
+prediction and row CAVLC neighbor context are therefore removed.
 
 ## Scope
 
@@ -65,13 +65,13 @@ it. `sh264e_encoder_destroy` resets no caller memory and does not free the arena
 The JPEG tool prints the same report:
 
 ```text
-encoder memory total bytes: 191048
-encoder arena work bytes: 191055
+encoder memory total bytes: 2120
+encoder arena work bytes: 2127
 encoder context bytes: 72
-encoder bitstream scratch bytes: 126976
-encoder recon luma bytes: 40960
-encoder recon chroma bytes: 20480
-encoder neighbor state bytes: 2560
+encoder bitstream scratch bytes: 2048
+encoder recon luma bytes: 0
+encoder recon chroma bytes: 0
+encoder neighbor state bytes: 0
 ```
 
 `tests/test_api.c` and `tests/run_ffmpeg_integration.py` assert these values so

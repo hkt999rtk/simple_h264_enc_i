@@ -27,17 +27,144 @@ static int next_nal_type(const uint8_t *data, size_t size, size_t *offset, unsig
     return 0;
 }
 
+static int next_nal_payload(const uint8_t *data,
+                            size_t size,
+                            size_t *offset,
+                            unsigned *type,
+                            const uint8_t **payload,
+                            size_t *payload_size)
+{
+    size_t start;
+    size_t end;
+
+    if (!next_nal_type(data, size, offset, type)) {
+        return 0;
+    }
+    start = *offset;
+    end = size;
+    while (start + 3u < end && data[end - 3u] == 0x00u &&
+           data[end - 2u] == 0x00u && data[end - 1u] == 0x01u) {
+        end -= 3u;
+    }
+    {
+        size_t i;
+        for (i = start; i + 3u < size; i++) {
+            if (data[i] == 0x00u && data[i + 1u] == 0x00u && data[i + 2u] == 0x01u) {
+                end = i;
+                break;
+            }
+        }
+    }
+    *payload = data + start;
+    *payload_size = end - start;
+    return 1;
+}
+
 static int expect_no_more_nals(const uint8_t *data, size_t size, size_t offset)
 {
     unsigned type = 0;
     return !next_nal_type(data, size, &offset, &type);
 }
 
+static int read_first_ue(const uint8_t *payload, size_t payload_size, unsigned *out_value)
+{
+    uint8_t rbsp[4096];
+    size_t rbsp_size = 0u;
+    size_t i;
+    unsigned zero_count = 0u;
+    size_t bit = 0u;
+    unsigned leading_zero_bits = 0u;
+    unsigned info_bits = 0u;
+
+    for (i = 0; i < payload_size; i++) {
+        const uint8_t byte = payload[i];
+        if (zero_count >= 2u && byte == 0x03u) {
+            zero_count = 0u;
+            continue;
+        }
+        if (rbsp_size >= sizeof(rbsp)) {
+            return 0;
+        }
+        rbsp[rbsp_size++] = byte;
+        if (byte == 0x00u) {
+            zero_count++;
+        } else {
+            zero_count = 0u;
+        }
+    }
+
+#define READ_RBSP_BIT(dst)                                      \
+    do {                                                        \
+        if (bit >= rbsp_size * 8u) {                            \
+            return 0;                                           \
+        }                                                       \
+        (dst) = (rbsp[bit / 8u] >> (7u - (bit % 8u))) & 1u;     \
+        bit++;                                                  \
+    } while (0)
+
+    for (;;) {
+        unsigned bit_value = 0u;
+        READ_RBSP_BIT(bit_value);
+        if (bit_value != 0u) {
+            break;
+        }
+        leading_zero_bits++;
+        if (leading_zero_bits >= 31u) {
+            return 0;
+        }
+    }
+    for (i = 0; i < leading_zero_bits; i++) {
+        unsigned bit_value = 0u;
+        READ_RBSP_BIT(bit_value);
+        info_bits = (info_bits << 1u) | bit_value;
+    }
+
+#undef READ_RBSP_BIT
+
+    *out_value = ((1u << leading_zero_bits) - 1u) + info_bits;
+    return 1;
+}
+
+static int expect_idr_mb_sequence(const uint8_t *data,
+                                  size_t size,
+                                  size_t offset,
+                                  unsigned first_mb,
+                                  unsigned count)
+{
+    unsigned i;
+
+    for (i = 0; i < count; i++) {
+        unsigned type = 0u;
+        unsigned got_first_mb = 0u;
+        const uint8_t *payload = NULL;
+        size_t payload_size = 0u;
+        if (!next_nal_payload(data, size, &offset, &type, &payload, &payload_size) ||
+            type != 5u) {
+            fprintf(stderr, "missing IDR slice NALU %u\n", i);
+            return 0;
+        }
+        if (!read_first_ue(payload, payload_size, &got_first_mb)) {
+            fprintf(stderr, "could not parse first_mb_in_slice for IDR NALU %u\n", i);
+            return 0;
+        }
+        if (got_first_mb != first_mb + i) {
+            fprintf(stderr, "first_mb_in_slice[%u] got %u, expected %u\n",
+                    i, got_first_mb, first_mb + i);
+            return 0;
+        }
+    }
+    if (!expect_no_more_nals(data, size, offset)) {
+        fprintf(stderr, "unexpected extra NALU after IDR macroblock slices\n");
+        return 0;
+    }
+    return 1;
+}
+
 static int expect_wrapper_nal_sequence(const uint8_t *data, size_t size)
 {
     size_t offset = 0;
     unsigned type = 0;
-    unsigned i;
+    const unsigned idr_count = SH264E_V1_MB_WIDTH * SH264E_V1_SLICE_COUNT;
 
     if (!next_nal_type(data, size, &offset, &type) || type != 7u) {
         fprintf(stderr, "missing SPS NALU\n");
@@ -47,17 +174,7 @@ static int expect_wrapper_nal_sequence(const uint8_t *data, size_t size)
         fprintf(stderr, "missing PPS NALU\n");
         return 0;
     }
-    for (i = 0; i < SH264E_V1_SLICE_COUNT; i++) {
-        if (!next_nal_type(data, size, &offset, &type) || type != 5u) {
-            fprintf(stderr, "missing IDR slice NALU %u\n", i);
-            return 0;
-        }
-    }
-    if (!expect_no_more_nals(data, size, offset)) {
-        fprintf(stderr, "unexpected extra NALU after progressive IDR slices\n");
-        return 0;
-    }
-    return 1;
+    return expect_idr_mb_sequence(data, size, offset, 0u, idr_count);
 }
 
 static int expect_header_nal_sequence(const uint8_t *data, size_t size)
@@ -75,21 +192,6 @@ static int expect_header_nal_sequence(const uint8_t *data, size_t size)
     }
     if (!expect_no_more_nals(data, size, offset)) {
         fprintf(stderr, "unexpected extra NALU after SPS/PPS\n");
-        return 0;
-    }
-    return 1;
-}
-
-static int expect_single_nal_type(const uint8_t *data, size_t size, unsigned expected_type)
-{
-    size_t offset = 0;
-    unsigned type = 0;
-    if (!next_nal_type(data, size, &offset, &type) || type != expected_type) {
-        fprintf(stderr, "expected NALU type %u\n", expected_type);
-        return 0;
-    }
-    if (!expect_no_more_nals(data, size, offset)) {
-        fprintf(stderr, "unexpected extra NALU\n");
         return 0;
     }
     return 1;
@@ -229,11 +331,11 @@ int main(void)
         ok = 0;
     }
     if (encoder_memory_report.context_bytes != 72u ||
-        encoder_memory_report.bitstream_scratch_bytes != slice_capacity ||
-        encoder_memory_report.recon_luma_bytes != 40960u ||
-        encoder_memory_report.recon_chroma_bytes != 20480u ||
-        encoder_memory_report.neighbor_state_bytes != 2560u ||
-        encoder_memory_report.total_bytes != 191048u) {
+        encoder_memory_report.bitstream_scratch_bytes != 2048u ||
+        encoder_memory_report.recon_luma_bytes != 0u ||
+        encoder_memory_report.recon_chroma_bytes != 0u ||
+        encoder_memory_report.neighbor_state_bytes != 0u ||
+        encoder_memory_report.total_bytes != 2120u) {
         fprintf(stderr,
                 "unexpected encoder memory report: context=%zu bitstream=%zu "
                 "luma=%zu chroma=%zu neighbor=%zu total=%zu\n",
@@ -520,7 +622,9 @@ int main(void)
             ok &= expect_status("encode progressive slice",
                                 sh264e_encode_idr_slice(encoder, &slice, slice_output, slice_capacity, &output_size),
                                 SH264E_OK);
-            if (!expect_single_nal_type(slice_output, output_size, 5u)) {
+            if (!expect_idr_mb_sequence(slice_output, output_size, 0u,
+                                        i * SH264E_V1_MB_WIDTH,
+                                        SH264E_V1_MB_WIDTH)) {
                 ok = 0;
             }
         }

@@ -10,11 +10,11 @@ This document is the planning source for issues #48 through #54. Developers
 working on those issues must fetch the latest `main` and read this file before
 implementation.
 
-The next encoder-direction change is tracked in
-`INDEPENDENT_MB_MODE_PLAN.md`: move from row-slice reconstructed-neighbor intra
-prediction to one H.264 slice per macroblock, with no reconstructed-neighbor
-reference. That plan is expected to remove about 64,000 bytes from encoder-owned
-state before any further bitstream scratch reductions.
+The next encoder-direction change is now implemented from
+`INDEPENDENT_MB_MODE_PLAN.md`: row-slice reconstructed-neighbor intra prediction
+has moved to one H.264 slice per macroblock, with no row reconstructed-neighbor
+reference. This removed 64,000 bytes from encoder-owned row state and reduced
+the RBSP scratch to one macroblock slice.
 
 ## Current Budget
 
@@ -26,14 +26,14 @@ storage and `.rodata`:
 | JPEG work arena | 123,024 | 1:1 4:2:0 path: one MCU-row cache plus NanoJPEG MCU-row temp buffers |
 | JPEG/scaler slice work | 0 I420 / 20,480 NV12 | Path-specific query for 1:1 4:2:0; conservative unknown-JPEG capacity remains 61,440 |
 | Reusable H.264 output chunk buffer | 4,096 | Byte-stream flush buffer |
-| Encoder arena | 191,055 | Caller-provided placement; see `docs/ENCODER_MEMORY_REPORT.md` |
+| Encoder arena | 2,127 | Caller-provided placement; see `docs/ENCODER_MEMORY_REPORT.md` |
 | Static mutable RAM | about 5,041 | Excludes `.rodata`; includes NanoJPEG's 512-byte compressed-input window |
-| Total | about 330 KiB I420 / 350 KiB NV12 | Excludes compressed JPEG input |
+| Total | about 135 KiB I420 / 155 KiB NV12 | Excludes compressed JPEG input |
 
 The old full decoded JPEG component-frame allocation was 5,529,600 bytes for
 `2560x1440` 4:2:0 and is no longer allowed for public JPEG APIs.
 
-Independent-MB target adjustment:
+Independent-MB result:
 
 | Block | Current bytes | Independent-MB target |
 | --- | ---: | ---: |
@@ -113,24 +113,24 @@ Acceptance focus:
 
 Target the opaque encoder heap line item:
 
-| Current | Target |
+| Previous | Implemented |
 | ---: | --- |
-| about 191,024 bytes | measured 191,048-byte sub-block report; 191,055-byte arena |
+| 191,048 bytes | 2,120-byte sub-block report; 2,127-byte arena |
 
 This is a measurement issue before optimization. The report should identify the
 major encoder state contributors such as reconstructed storage, neighbor/nonzero
 state, bitstream scratch, and context/config overhead.
 
-Measured fixed-v1 composition:
+Measured fixed-v1 composition after independent-MB mode:
 
 | Block | Bytes |
 | --- | ---: |
 | Encoder context/config | 72 |
-| Bitstream scratch | 126,976 |
-| Reconstructed luma slice | 40,960 |
-| Reconstructed chroma slices | 20,480 |
-| Neighbor/nonzero state | 2,560 |
-| Total encoder memory | 191,048 |
+| Bitstream scratch | 2,048 |
+| Reconstructed luma slice | 0 |
+| Reconstructed chroma slices | 0 |
+| Neighbor/nonzero state | 0 |
+| Total encoder memory | 2,120 |
 
 Acceptance focus:
 
@@ -167,7 +167,7 @@ Acceptance focus:
 
 Implemented arena contract:
 
-* `sh264e_encoder_get_work_size` reports 191,055 bytes for the fixed v1 config,
+* `sh264e_encoder_get_work_size` reports 2,127 bytes for the fixed v1 config,
   including worst-case opaque-control alignment padding.
 * `sh264e_encoder_create_with_arena` supports misaligned caller memory and
   avoids production heap allocation for encoder-owned state.
