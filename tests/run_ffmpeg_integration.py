@@ -41,6 +41,7 @@ H264_OUTPUT_CONSUMER_CHUNKS_MIN = 1 + 90
 H264_OUTPUT_CHUNK_BYTES = 4_096
 H264_TINY_OUTPUT_CHUNK_BYTES = 7
 H264_ONE_SHOT_OUTPUT_BYTES = 11_428_864
+JPEG_SOURCE_CHUNK_SIZES = (1, 2, 7, 64, 1024)
 ENCODER_CONTEXT_BYTES = 72
 ENCODER_BITSTREAM_SCRATCH_BYTES = 126_976
 ENCODER_RECON_LUMA_BYTES = 40_960
@@ -425,6 +426,32 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
             raise RuntimeError(
                 f"JPEG one-shot H.264 output capacity changed: got {output_buffer}, expected {H264_ONE_SHOT_OUTPUT_BYTES}"
             )
+    return result.stdout
+
+
+def encode_jpeg_source_chunks(args, fmt, jpeg_input, bitstream, chunk_size,
+                              expected_cache_bytes=None,
+                              expected_work_bytes=None,
+                              expected_peak_bytes=None,
+                              expected_slice_work_bytes=None,
+                              expected_effective_slice_work_bytes=None):
+    stdout = encode_jpeg(
+        args,
+        fmt,
+        jpeg_input,
+        bitstream,
+        ["--test-jpeg-source-chunk-size", str(chunk_size)],
+        expected_cache_bytes=expected_cache_bytes,
+        expected_work_bytes=expected_work_bytes,
+        expected_peak_bytes=expected_peak_bytes,
+        expected_slice_work_bytes=expected_slice_work_bytes,
+        expected_effective_slice_work_bytes=expected_effective_slice_work_bytes,
+    )
+    reported_chunk_size = parse_jpeg_metric(stdout, "jpeg source chunk bytes:")
+    if reported_chunk_size != chunk_size:
+        raise RuntimeError(
+            f"JPEG source chunk size changed: got {reported_chunk_size}, expected {chunk_size}"
+        )
 
 
 def encode_jpeg_streaming_prototype(args, fmt, jpeg_input, bitstream,
@@ -647,6 +674,25 @@ def main():
                 validate_bitstream(args.ffprobe, args.ffmpeg, tiny_consumer_output)
                 if tiny_consumer_output.read_bytes() != one_shot_output.read_bytes():
                     raise RuntimeError("JPEG tiny-chunk consumer bitstream differs from one-shot output")
+                for source_chunk_size in JPEG_SOURCE_CHUNK_SIZES:
+                    source_output = workdir / (
+                        f"output_jpeg_source_chunk_{source_chunk_size}_yuvj420p_i420.h264"
+                    )
+                    encode_jpeg_source_chunks(
+                        args,
+                        fmt,
+                        jpeg_input,
+                        source_output,
+                        source_chunk_size,
+                        STREAMING_CACHE_BYTES_720P[pix_fmt],
+                        PRODUCTION_MEMORY_720P_420["work"],
+                        PRODUCTION_MEMORY_720P_420["peak"],
+                    )
+                    validate_bitstream(args.ffprobe, args.ffmpeg, source_output)
+                    if source_output.read_bytes() != one_shot_output.read_bytes():
+                        raise RuntimeError(
+                            f"JPEG source chunk {source_chunk_size} bitstream differs from one-shot output"
+                        )
                 run_expect_fail([
                     args.jpeg_encoder,
                     "--test-output-consumer-fail-after",
@@ -720,6 +766,18 @@ def main():
         validate_bitstream(args.ffprobe, args.ffmpeg, restart_jpeg_output)
         compare_decoded_i420(args, restart_jpeg_output, restart_streaming_output,
                              "output_jpeg_yuvj420p_restart_i420_streaming_compare")
+        restart_source_output = workdir / "output_jpeg_source_chunk_7_yuvj420p_restart_i420.h264"
+        encode_jpeg_source_chunks(
+            args,
+            "i420",
+            restart_jpeg_input,
+            restart_source_output,
+            7,
+            STREAMING_CACHE_BYTES_720P["yuvj420p"],
+        )
+        validate_bitstream(args.ffprobe, args.ffmpeg, restart_source_output)
+        if restart_source_output.read_bytes() != restart_jpeg_output.read_bytes():
+            raise RuntimeError("JPEG source restart-marker bitstream differs from memory input")
 
     grayscale_jpeg_input = workdir / "input_gray_720p.jpg"
     run([

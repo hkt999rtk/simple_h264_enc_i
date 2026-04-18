@@ -166,6 +166,20 @@ nj_result_t njDecodeComponents(const void* jpeg, const int size);
 typedef int (*nj_mcu_row_callback_t)(int mcu_y, void* user);
 nj_result_t njDecodeMcuRows(const void* jpeg, const int size, nj_mcu_row_callback_t callback, void* user);
 
+typedef int (*nj_input_read_callback_t)(void *user,
+                                        unsigned char *dst,
+                                        int requested,
+                                        int *out_read);
+
+typedef struct _nj_input_source {
+    nj_input_read_callback_t read;
+    void *user;
+} nj_input_source_t;
+
+nj_result_t njDecodeMcuRowsFromSource(const nj_input_source_t *source,
+                                      nj_mcu_row_callback_t callback,
+                                      void* user);
+
 // njGetWidth: Return the width (in pixels) of the most recently decoded
 // image. If njDecode() failed, the result of njGetWidth() is undefined.
 int njGetWidth(void);
@@ -352,6 +366,7 @@ typedef struct _nj_code {
 
 #define NJ_VLC_TABLE_COUNT 4
 #define NJ_VLC_FAST_SIZE (1 << NJ_VLC_FAST_BITS)
+#define NJ_INPUT_BUFFER_SIZE 512
 
 typedef struct _nj_huff {
     unsigned char symbols[256];
@@ -376,6 +391,10 @@ typedef struct _nj_ctx {
     nj_result_t error;
     const unsigned char *pos;
     int size;
+    unsigned char input_buffer[NJ_INPUT_BUFFER_SIZE];
+    nj_input_read_callback_t input_read;
+    void *input_user;
+    int input_eof;
     int length;
     int width, height;
     int mbwidth, mbheight;
@@ -520,28 +539,106 @@ NJ_INLINE void njResetHuffTable(nj_huff_table_t *tab) {
         tab->maxcode[i] = -1;
 }
 
+static int njFillInput(int needed) {
+    if (needed < 0 || needed > NJ_INPUT_BUFFER_SIZE) {
+        nj.error = NJ_INTERNAL_ERR;
+        return 0;
+    }
+    if (!nj.input_read) {
+        return nj.size >= needed;
+    }
+    if (nj.size > 0 && nj.pos != nj.input_buffer) {
+        njCopyMem(nj.input_buffer, nj.pos, nj.size);
+    }
+    nj.pos = nj.input_buffer;
+    while (nj.size < needed && !nj.input_eof && !nj.error) {
+        int read_bytes = 0;
+        const int capacity = NJ_INPUT_BUFFER_SIZE - nj.size;
+        if (capacity <= 0) {
+            nj.error = NJ_INTERNAL_ERR;
+            return 0;
+        }
+        if (nj.input_read(nj.input_user,
+                          &nj.input_buffer[nj.size],
+                          capacity,
+                          &read_bytes) != 0) {
+            nj.error = NJ_SYNTAX_ERROR;
+            return 0;
+        }
+        if (read_bytes < 0 || read_bytes > capacity) {
+            nj.error = NJ_SYNTAX_ERROR;
+            return 0;
+        }
+        if (read_bytes == 0) {
+            nj.input_eof = 1;
+            break;
+        }
+        nj.size += read_bytes;
+    }
+    return nj.size >= needed;
+}
+
+NJ_INLINE int njEnsure(int count) {
+    return njFillInput(count);
+}
+
+NJ_INLINE unsigned char njPeek(int offset) {
+    if (!njEnsure(offset + 1)) {
+        nj.error = NJ_SYNTAX_ERROR;
+        return 0;
+    }
+    return nj.pos[offset];
+}
+
+NJ_INLINE unsigned short njPeek16(int offset) {
+    unsigned int high;
+    unsigned int low;
+    if (!njEnsure(offset + 2)) {
+        nj.error = NJ_SYNTAX_ERROR;
+        return 0;
+    }
+    high = nj.pos[offset];
+    low = nj.pos[offset + 1];
+    return (unsigned short)((high << 8) | low);
+}
+
+static unsigned char njReadByte(void) {
+    unsigned char value;
+    if (!njEnsure(1)) {
+        nj.error = NJ_SYNTAX_ERROR;
+        return 0;
+    }
+    value = *nj.pos++;
+    nj.size--;
+    return value;
+}
+
 static int njShowBits(int bits) {
     unsigned char newbyte;
     if (!bits) return 0;
     while (nj.bufbits < bits) {
-        if (nj.size <= 0) {
+        if (!njEnsure(1)) {
+            if (nj.error) return 0;
             nj.buf = (nj.buf << 8) | 0xFF;
             nj.bufbits += 8;
             continue;
         }
-        newbyte = *nj.pos++;
-        nj.size--;
+        newbyte = njReadByte();
+        if (nj.error) return 0;
         nj.bufbits += 8;
         nj.buf = (nj.buf << 8) | newbyte;
         if (newbyte == 0xFF) {
-            if (nj.size) {
-                unsigned char marker = *nj.pos++;
-                nj.size--;
+            if (njEnsure(1)) {
+                unsigned char marker = njReadByte();
+                if (nj.error) return 0;
                 switch (marker) {
                     case 0x00:
                     case 0xFF:
                         break;
-                    case 0xD9: nj.size = 0; break;
+                    case 0xD9:
+                        nj.size = 0;
+                        nj.input_eof = 1;
+                        break;
                     default:
                         if ((marker & 0xF8) != 0xD0)
                             nj.error = NJ_SYNTAX_ERROR;
@@ -550,8 +647,9 @@ static int njShowBits(int bits) {
                             nj.bufbits += 8;
                         }
                 }
-            } else
+            } else {
                 nj.error = NJ_SYNTAX_ERROR;
+            }
         }
     }
     return (nj.buf >> (nj.bufbits - bits)) & ((1 << bits) - 1);
@@ -574,10 +672,22 @@ NJ_INLINE void njByteAlign(void) {
 }
 
 static void njSkip(int count) {
-    nj.pos += count;
-    nj.size -= count;
-    nj.length -= count;
-    if (nj.size < 0) nj.error = NJ_SYNTAX_ERROR;
+    if (count < 0) {
+        nj.error = NJ_SYNTAX_ERROR;
+        return;
+    }
+    while (count > 0 && !nj.error) {
+        int chunk;
+        if (!njEnsure(1)) {
+            nj.error = NJ_SYNTAX_ERROR;
+            return;
+        }
+        chunk = (count < nj.size) ? count : nj.size;
+        nj.pos += chunk;
+        nj.size -= chunk;
+        nj.length -= chunk;
+        count -= chunk;
+    }
 }
 
 NJ_INLINE unsigned short njDecode16(const unsigned char *pos) {
@@ -585,9 +695,9 @@ NJ_INLINE unsigned short njDecode16(const unsigned char *pos) {
 }
 
 static void njDecodeLength(void) {
-    if (nj.size < 2) njThrow(NJ_SYNTAX_ERROR);
+    if (!njEnsure(2)) njThrow(NJ_SYNTAX_ERROR);
     nj.length = njDecode16(nj.pos);
-    if (nj.length > nj.size) njThrow(NJ_SYNTAX_ERROR);
+    if (nj.length < 2) njThrow(NJ_SYNTAX_ERROR);
     njSkip(2);
 }
 
@@ -602,11 +712,12 @@ NJ_INLINE void njDecodeSOF(void) {
     njDecodeLength();
     njCheckError();
     if (nj.length < 9) njThrow(NJ_SYNTAX_ERROR);
-    if (nj.pos[0] != 8) njThrow(NJ_UNSUPPORTED);
-    nj.height = njDecode16(nj.pos+1);
-    nj.width = njDecode16(nj.pos+3);
+    if (!njEnsure(6)) njThrow(NJ_SYNTAX_ERROR);
+    if (njPeek(0) != 8) njThrow(NJ_UNSUPPORTED);
+    nj.height = njPeek16(1);
+    nj.width = njPeek16(3);
     if (!nj.width || !nj.height) njThrow(NJ_SYNTAX_ERROR);
-    nj.ncomp = nj.pos[5];
+    nj.ncomp = njPeek(5);
     njSkip(6);
     switch (nj.ncomp) {
         case 1:
@@ -617,12 +728,13 @@ NJ_INLINE void njDecodeSOF(void) {
     }
     if (nj.length < (nj.ncomp * 3)) njThrow(NJ_SYNTAX_ERROR);
     for (i = 0, c = nj.comp;  i < nj.ncomp;  ++i, ++c) {
-        c->cid = nj.pos[0];
-        if (!(c->ssx = nj.pos[1] >> 4)) njThrow(NJ_SYNTAX_ERROR);
+        if (!njEnsure(3)) njThrow(NJ_SYNTAX_ERROR);
+        c->cid = njPeek(0);
+        if (!(c->ssx = njPeek(1) >> 4)) njThrow(NJ_SYNTAX_ERROR);
         if (c->ssx & (c->ssx - 1)) njThrow(NJ_UNSUPPORTED);  // non-power of two
-        if (!(c->ssy = nj.pos[1] & 15)) njThrow(NJ_SYNTAX_ERROR);
+        if (!(c->ssy = njPeek(1) & 15)) njThrow(NJ_SYNTAX_ERROR);
         if (c->ssy & (c->ssy - 1)) njThrow(NJ_UNSUPPORTED);  // non-power of two
-        if ((c->qtsel = nj.pos[2]) & 0xFC) njThrow(NJ_SYNTAX_ERROR);
+        if ((c->qtsel = njPeek(2)) & 0xFC) njThrow(NJ_SYNTAX_ERROR);
         njSkip(3);
         nj.qtused |= 1 << c->qtsel;
         if (c->ssx > ssxmax) ssxmax = c->ssx;
@@ -659,12 +771,13 @@ NJ_INLINE void njDecodeDHT(void) {
     njDecodeLength();
     njCheckError();
     while (nj.length >= 17) {
-        table = nj.pos[0];
+        if (!njEnsure(17)) njThrow(NJ_SYNTAX_ERROR);
+        table = njPeek(0);
         if (table & 0xEC) njThrow(NJ_SYNTAX_ERROR);
         if (table & 0x02) njThrow(NJ_UNSUPPORTED);
         table = (table | (table >> 3)) & 3;  // combined DC/AC + tableid value
         for (codelen = 1;  codelen <= 16;  ++codelen)
-            counts[codelen - 1] = nj.pos[codelen];
+            counts[codelen - 1] = njPeek(codelen);
         njSkip(17);
         huff = &nj.vlctab[table];
         njResetHuffTable(huff);
@@ -680,12 +793,13 @@ NJ_INLINE void njDecodeDHT(void) {
                 continue;
             }
             if (nj.length < currcnt) njThrow(NJ_SYNTAX_ERROR);
+            if (!njEnsure(currcnt)) njThrow(NJ_SYNTAX_ERROR);
             if (symbol_index > 256 - currcnt) njThrow(NJ_SYNTAX_ERROR);
             huff->mincode[codelen] = code;
             huff->maxcode[codelen] = code + currcnt - 1;
             huff->first_symbol[codelen] = (unsigned short)symbol_index;
             for (i = 0;  i < currcnt;  ++i) {
-                register unsigned char symbol = nj.pos[i];
+                register unsigned char symbol = njPeek(i);
                 const int huff_code = huff->mincode[codelen] + i;
                 huff->symbols[symbol_index + i] = symbol;
                 if (codelen <= NJ_VLC_FAST_BITS) {
@@ -712,12 +826,13 @@ NJ_INLINE void njDecodeDQT(void) {
     njDecodeLength();
     njCheckError();
     while (nj.length >= 65) {
-        i = nj.pos[0];
+        if (!njEnsure(65)) njThrow(NJ_SYNTAX_ERROR);
+        i = njPeek(0);
         if (i & 0xFC) njThrow(NJ_SYNTAX_ERROR);
         nj.qtavail |= 1 << i;
         t = &nj.qtab[i][0];
         for (i = 0;  i < 64;  ++i)
-            t[i] = nj.pos[i + 1];
+            t[i] = njPeek(i + 1);
         njSkip(65);
     }
     if (nj.length) njThrow(NJ_SYNTAX_ERROR);
@@ -727,7 +842,7 @@ NJ_INLINE void njDecodeDRI(void) {
     njDecodeLength();
     njCheckError();
     if (nj.length < 2) njThrow(NJ_SYNTAX_ERROR);
-    nj.rstinterval = njDecode16(nj.pos);
+    nj.rstinterval = njPeek16(0);
     njSkip(nj.length);
 }
 
@@ -793,18 +908,21 @@ NJ_INLINE void njDecodeScan(void) {
     njDecodeLength();
     njCheckError();
     if (nj.length < (4 + 2 * nj.ncomp)) njThrow(NJ_SYNTAX_ERROR);
-    if (nj.pos[0] != nj.ncomp) njThrow(NJ_UNSUPPORTED);
+    if (!njEnsure(1)) njThrow(NJ_SYNTAX_ERROR);
+    if (njPeek(0) != nj.ncomp) njThrow(NJ_UNSUPPORTED);
     njSkip(1);
     for (i = 0, c = nj.comp;  i < nj.ncomp;  ++i, ++c) {
-        if (nj.pos[0] != c->cid) njThrow(NJ_SYNTAX_ERROR);
-        if (nj.pos[1] & 0xEE) njThrow(NJ_SYNTAX_ERROR);
-        c->dctabsel = nj.pos[1] >> 4;
-        c->actabsel = (nj.pos[1] & 1) | 2;
+        if (!njEnsure(2)) njThrow(NJ_SYNTAX_ERROR);
+        if (njPeek(0) != c->cid) njThrow(NJ_SYNTAX_ERROR);
+        if (njPeek(1) & 0xEE) njThrow(NJ_SYNTAX_ERROR);
+        c->dctabsel = njPeek(1) >> 4;
+        c->actabsel = (njPeek(1) & 1) | 2;
         if (!(nj.vlctab_avail & (1u << c->dctabsel))) njThrow(NJ_SYNTAX_ERROR);
         if (!(nj.vlctab_avail & (1u << c->actabsel))) njThrow(NJ_SYNTAX_ERROR);
         njSkip(2);
     }
-    if (nj.pos[0] || (nj.pos[1] != 63) || nj.pos[2]) njThrow(NJ_UNSUPPORTED);
+    if (!njEnsure(3)) njThrow(NJ_SYNTAX_ERROR);
+    if (njPeek(0) || (njPeek(1) != 63) || njPeek(2)) njThrow(NJ_UNSUPPORTED);
     njSkip(nj.length);
     for (mbx = mby = 0;;) {
         for (i = 0, c = nj.comp;  i < nj.ncomp;  ++i, ++c)
@@ -1001,6 +1119,7 @@ void njDone(void) {
 
 static nj_result_t njDecodeInternal(const void* jpeg,
                                     const int size,
+                                    const nj_input_source_t *source,
                                     int components_only,
                                     int mcu_rows_only,
                                     nj_mcu_row_callback_t callback,
@@ -1010,15 +1129,25 @@ static nj_result_t njDecodeInternal(const void* jpeg,
     nj.decode_mcu_rows_only = mcu_rows_only;
     nj.mcu_row_callback = callback;
     nj.mcu_row_user = user;
-    nj.pos = (const unsigned char*) jpeg;
-    nj.size = size & 0x7FFFFFFF;
-    if (nj.size < 2) return NJ_NO_JPEG;
-    if ((nj.pos[0] ^ 0xFF) | (nj.pos[1] ^ 0xD8)) return NJ_NO_JPEG;
+    if (source) {
+        if (!source->read) return NJ_INTERNAL_ERR;
+        nj.input_read = source->read;
+        nj.input_user = source->user;
+        nj.pos = nj.input_buffer;
+        nj.size = 0;
+    } else {
+        nj.pos = (const unsigned char*) jpeg;
+        nj.size = size & 0x7FFFFFFF;
+    }
+    if (!njEnsure(2)) return NJ_NO_JPEG;
+    if ((njPeek(0) ^ 0xFF) | (njPeek(1) ^ 0xD8)) return NJ_NO_JPEG;
     njSkip(2);
     while (!nj.error) {
-        if ((nj.size < 2) || (nj.pos[0] != 0xFF)) return NJ_SYNTAX_ERROR;
+        unsigned char marker;
+        if (!njEnsure(2) || (njPeek(0) != 0xFF)) return NJ_SYNTAX_ERROR;
         njSkip(2);
-        switch (nj.pos[-1]) {
+        marker = nj.pos[-1];
+        switch (marker) {
             case 0xC0: njDecodeSOF();  break;
             case 0xC4: njDecodeDHT();  break;
             case 0xDB: njDecodeDQT();  break;
@@ -1026,7 +1155,7 @@ static nj_result_t njDecodeInternal(const void* jpeg,
             case 0xDA: njDecodeScan(); break;
             case 0xFE: njSkipMarker(); break;
             default:
-                if ((nj.pos[-1] & 0xF0) == 0xE0)
+                if ((marker & 0xF0) == 0xE0)
                     njSkipMarker();
                 else
                     return NJ_UNSUPPORTED;
@@ -1047,18 +1176,25 @@ static nj_result_t njDecodeInternal(const void* jpeg,
 #if NJ_ENABLE_FULL_IMAGE_DECODE
 
 nj_result_t njDecode(const void* jpeg, const int size) {
-    return njDecodeInternal(jpeg, size, 0, 0, NULL, NULL);
+    return njDecodeInternal(jpeg, size, NULL, 0, 0, NULL, NULL);
 }
 
 nj_result_t njDecodeComponents(const void* jpeg, const int size) {
-    return njDecodeInternal(jpeg, size, 1, 0, NULL, NULL);
+    return njDecodeInternal(jpeg, size, NULL, 1, 0, NULL, NULL);
 }
 
 #endif
 
 nj_result_t njDecodeMcuRows(const void* jpeg, const int size, nj_mcu_row_callback_t callback, void* user) {
     if (!callback) return NJ_INTERNAL_ERR;
-    return njDecodeInternal(jpeg, size, 1, 1, callback, user);
+    return njDecodeInternal(jpeg, size, NULL, 1, 1, callback, user);
+}
+
+nj_result_t njDecodeMcuRowsFromSource(const nj_input_source_t *source,
+                                      nj_mcu_row_callback_t callback,
+                                      void* user) {
+    if (!source || !callback) return NJ_INTERNAL_ERR;
+    return njDecodeInternal(NULL, 0, source, 1, 1, callback, user);
 }
 
 int njGetWidth(void)            { return nj.width; }

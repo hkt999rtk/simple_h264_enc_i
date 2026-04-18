@@ -78,6 +78,16 @@ typedef sh264e_status_t (*sh264e_output_consumer_t)(void *user,
                                                     const uint8_t *data,
                                                     size_t size);
 
+typedef sh264e_status_t (*sh264e_jpeg_read_fn)(void *user,
+                                               uint8_t *dst,
+                                               size_t requested,
+                                               size_t *out_read);
+
+typedef struct sh264e_jpeg_source_t {
+    sh264e_jpeg_read_fn read;
+    void *user;
+} sh264e_jpeg_source_t;
+
 sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,
                                       sh264e_encoder_t **out_encoder);
 
@@ -139,9 +149,16 @@ sh264e_status_t sh264e_jpeg_get_slice_work_size(const uint8_t *jpeg_data,
                                                 sh264e_pixfmt_t pixfmt,
                                                 size_t *out_size);
 
+sh264e_status_t sh264e_jpeg_source_get_slice_work_size(const sh264e_jpeg_source_t *source,
+                                                       sh264e_pixfmt_t pixfmt,
+                                                       size_t *out_size);
+
 sh264e_status_t sh264e_jpeg_get_work_size(const uint8_t *jpeg_data,
                                           size_t jpeg_size,
                                           size_t *out_size);
+
+sh264e_status_t sh264e_jpeg_source_get_work_size(const sh264e_jpeg_source_t *source,
+                                                 size_t *out_size);
 
 sh264e_status_t sh264e_jpeg_get_last_allocation_stats(sh264e_jpeg_allocation_stats_t *out_stats);
 
@@ -173,6 +190,18 @@ sh264e_status_t sh264e_encode_jpeg_idr_with_arena_stream(
     sh264e_encoder_t *encoder,
     const uint8_t *jpeg_data,
     size_t jpeg_size,
+    uint8_t *jpeg_arena,
+    size_t jpeg_arena_size,
+    uint8_t *work_buffer,
+    size_t work_buffer_capacity,
+    uint8_t *out_buffer,
+    size_t out_buffer_capacity,
+    sh264e_output_consumer_t consumer,
+    void *consumer_user);
+
+sh264e_status_t sh264e_encode_jpeg_source_idr_with_arena_stream(
+    sh264e_encoder_t *encoder,
+    const sh264e_jpeg_source_t *source,
     uint8_t *jpeg_arena,
     size_t jpeg_arena_size,
     uint8_t *work_buffer,

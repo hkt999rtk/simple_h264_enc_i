@@ -25,6 +25,7 @@ static void usage(const char *argv0)
             "[--test-arena-shrink BYTES] [--test-arena-offset BYTES] "
             "[--test-one-shot-output] [--test-output-consumer] "
             "[--test-output-consumer-fail-after CHUNKS] [--test-output-chunk-size BYTES] "
+            "[--test-jpeg-source-chunk-size BYTES] "
             "--format i420|nv12 input.jpg output.h264\n",
             argv0);
 }
@@ -106,6 +107,49 @@ static int write_exact(FILE *fp, const uint8_t *buf, size_t size)
     return fwrite(buf, 1u, size, fp) == size;
 }
 
+typedef struct jpeg_memory_source_state_t {
+    const uint8_t *data;
+    size_t size;
+    size_t offset;
+    size_t chunk_size;
+} jpeg_memory_source_state_t;
+
+static sh264e_status_t read_jpeg_source_chunk(void *user,
+                                              uint8_t *dst,
+                                              size_t requested,
+                                              size_t *out_read)
+{
+    jpeg_memory_source_state_t *state = (jpeg_memory_source_state_t *)user;
+    size_t remaining;
+    size_t to_read;
+
+    if (state == NULL || dst == NULL || out_read == NULL || requested == 0u) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    if (state->offset > state->size) {
+        return SH264E_ERR_INTERNAL;
+    }
+    remaining = state->size - state->offset;
+    to_read = requested;
+    if (to_read > state->chunk_size) {
+        to_read = state->chunk_size;
+    }
+    if (to_read > remaining) {
+        to_read = remaining;
+    }
+    if (to_read != 0u) {
+        memcpy(dst, state->data + state->offset, to_read);
+        state->offset += to_read;
+    }
+    *out_read = to_read;
+    return SH264E_OK;
+}
+
+static void reset_jpeg_source(jpeg_memory_source_state_t *state)
+{
+    state->offset = 0u;
+}
+
 typedef struct output_consumer_state_t {
     FILE *fp;
     uint8_t *data;
@@ -165,6 +209,7 @@ int main(int argc, char **argv)
     size_t output_capacity = 0;
     size_t output_chunk_capacity = 0;
     size_t output_chunk_override = 0;
+    size_t jpeg_source_chunk_size = 0;
     size_t output_size = 0;
     size_t allocation_limit = (size_t)-1;
     size_t arena_shrink = 0;
@@ -173,6 +218,8 @@ int main(int argc, char **argv)
     int one_shot_output_test = 0;
     int output_consumer_test = 0;
     int output_consumer_fail_after = -1;
+    jpeg_memory_source_state_t jpeg_source_state;
+    sh264e_jpeg_source_t jpeg_source;
     int argi = 1;
     int rc = 1;
 
@@ -207,6 +254,13 @@ int main(int argc, char **argv)
         } else if (argi + 1 < argc && strcmp(argv[argi], "--test-output-chunk-size") == 0) {
             if (!parse_size(argv[argi + 1], &output_chunk_override) ||
                 output_chunk_override == 0u) {
+                usage(argv[0]);
+                return 2;
+            }
+            argi += 2;
+        } else if (argi + 1 < argc && strcmp(argv[argi], "--test-jpeg-source-chunk-size") == 0) {
+            if (!parse_size(argv[argi + 1], &jpeg_source_chunk_size) ||
+                jpeg_source_chunk_size == 0u) {
                 usage(argv[0]);
                 return 2;
             }
@@ -248,6 +302,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "--test-output-consumer cannot be combined with streaming prototype or allocation-limit modes\n");
         goto done;
     }
+    if (jpeg_source_chunk_size != 0u &&
+        (streaming_prototype || allocation_limit != (size_t)-1 ||
+         one_shot_output_test || output_consumer_test)) {
+        fprintf(stderr, "--test-jpeg-source-chunk-size cannot be combined with other JPEG input/output test modes\n");
+        goto done;
+    }
     if (one_shot_output_test && (streaming_prototype || output_consumer_test ||
                                  allocation_limit != (size_t)-1)) {
         fprintf(stderr, "--test-one-shot-output cannot be combined with other output test modes\n");
@@ -258,8 +318,22 @@ int main(int argc, char **argv)
         fprintf(stderr, "--test-output-chunk-size requires streaming output mode\n");
         goto done;
     }
+    memset(&jpeg_source_state, 0, sizeof(jpeg_source_state));
+    memset(&jpeg_source, 0, sizeof(jpeg_source));
+    if (jpeg_source_chunk_size != 0u) {
+        jpeg_source_state.data = jpeg_data;
+        jpeg_source_state.size = jpeg_size;
+        jpeg_source_state.chunk_size = jpeg_source_chunk_size;
+        jpeg_source.read = read_jpeg_source_chunk;
+        jpeg_source.user = &jpeg_source_state;
+    }
     if (allocation_limit == (size_t)-1) {
-        status = sh264e_jpeg_get_work_size(jpeg_data, jpeg_size, &jpeg_work_size);
+        if (jpeg_source_chunk_size != 0u) {
+            reset_jpeg_source(&jpeg_source_state);
+            status = sh264e_jpeg_source_get_work_size(&jpeg_source, &jpeg_work_size);
+        } else {
+            status = sh264e_jpeg_get_work_size(jpeg_data, jpeg_size, &jpeg_work_size);
+        }
         if (status != SH264E_OK) {
             fprintf(stderr, "JPEG work-size query failed: %s\n", sh264e_status_string(status));
             goto done;
@@ -291,7 +365,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "sh264e_encoder_get_work_size failed: %s\n", sh264e_status_string(status));
         goto done;
     }
-    status = sh264e_jpeg_get_slice_work_size(jpeg_data, jpeg_size, pixfmt, &work_size);
+    if (jpeg_source_chunk_size != 0u) {
+        reset_jpeg_source(&jpeg_source_state);
+        status = sh264e_jpeg_source_get_slice_work_size(&jpeg_source, pixfmt, &work_size);
+    } else {
+        status = sh264e_jpeg_get_slice_work_size(jpeg_data, jpeg_size, pixfmt, &work_size);
+    }
     if (status != SH264E_OK) {
         fprintf(stderr, "sh264e_jpeg_get_slice_work_size failed: %s\n", sh264e_status_string(status));
         goto done;
@@ -391,6 +470,35 @@ int main(int argc, char **argv)
             status = SH264E_ERR_INTERNAL;
         }
         if (status == SH264E_OK) {
+            printf("jpeg output consumer chunks: %u\n", consumer_state.chunks);
+            printf("jpeg output chunk buffer bytes: %zu\n", output_chunk_capacity);
+        }
+    } else if (jpeg_source_chunk_size != 0u) {
+        output_consumer_state_t consumer_state;
+
+        output = fopen(output_path, "wb");
+        if (output == NULL) {
+            fprintf(stderr, "failed to open output: %s\n", output_path);
+            goto done;
+        }
+        memset(&consumer_state, 0, sizeof(consumer_state));
+        consumer_state.fp = output;
+        consumer_state.fail_after_chunks = output_consumer_fail_after;
+        reset_jpeg_source(&jpeg_source_state);
+        status = sh264e_encode_jpeg_source_idr_with_arena_stream(
+            encoder, &jpeg_source,
+            jpeg_arena, jpeg_arena_size,
+            work, work_size,
+            output_chunk_buf, output_chunk_capacity,
+            collect_output_chunk, &consumer_state);
+        output_size = consumer_state.size;
+        if (status == SH264E_OK && consumer_state.chunks < 1u + SH264E_V1_SLICE_COUNT) {
+            fprintf(stderr, "output consumer saw %u chunks, expected at least %u\n",
+                    consumer_state.chunks, 1u + SH264E_V1_SLICE_COUNT);
+            status = SH264E_ERR_INTERNAL;
+        }
+        if (status == SH264E_OK) {
+            printf("jpeg source chunk bytes: %zu\n", jpeg_source_chunk_size);
             printf("jpeg output consumer chunks: %u\n", consumer_state.chunks);
             printf("jpeg output chunk buffer bytes: %zu\n", output_chunk_capacity);
         }

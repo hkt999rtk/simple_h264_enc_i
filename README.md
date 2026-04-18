@@ -13,7 +13,7 @@ This project is intentionally small and narrow in scope:
 * No file I/O inside the encoder library
 * Progressive slice API for lower SRAM footprint and input bandwidth
 * Core fixed-point bilinear scaler for resizing source YUV420 into encoder slices
-* Core memory-input baseline JPEG decode path via NanoJPEG
+* Core memory-input and source-input baseline JPEG decode path via NanoJPEG
 
 The encoder is designed for validation and offline experiments, not compression efficiency.
 
@@ -144,8 +144,16 @@ Encode a baseline JPEG memory-input path through the library wrapper:
 ./build/sh264e_encode_jpeg --format nv12 input.jpg output.h264
 ```
 
-The JPEG path uses NanoJPEG inside the core library. The tool only reads the JPEG file and writes the `.h264` output; the library API accepts a caller-provided JPEG byte buffer and emits Annex B byte-stream chunks through caller-owned output memory.
+The JPEG path uses NanoJPEG inside the core library. The tool only reads the JPEG file and writes the `.h264` output; the library API accepts either a caller-provided JPEG byte buffer or a sequential `sh264e_jpeg_source_t` reader and emits Annex B byte-stream chunks through caller-owned output memory.
 The tool sizes a caller-provided JPEG decoder arena with `sh264e_jpeg_get_work_size`, passes that arena to `sh264e_encode_jpeg_idr_with_arena_stream`, and prints the arena requirement plus current and peak NanoJPEG allocation bytes reported by `sh264e_jpeg_get_last_allocation_stats`.
+Embedded callers that cannot provide one contiguous compressed JPEG can use
+`sh264e_jpeg_source_get_work_size`, `sh264e_jpeg_source_get_slice_work_size`,
+and `sh264e_encode_jpeg_source_idr_with_arena_stream`. The source callback is
+pull-only and sequential: it fills up to the requested byte count, reports the
+actual bytes read, and returns `0` bytes at EOF. Work-size queries consume the
+source, so callers must reset or recreate the source before the slice-work query
+and encode call. File I/O, flash drivers, DMA-ring handling, and retry policy
+remain outside the library.
 The public diagnostic surface also exposes `sh264e_jpeg_get_last_streaming_cache_bytes` so tools and regression tests can report decoded-row cache usage without private declarations.
 `sh264e_jpeg_get_slice_work_size` reports the path-specific caller work buffer
 needed for a specific JPEG input and output pixel format; the older
@@ -164,7 +172,7 @@ caller-provided arena. The fixed-v1 arena size is currently 191,055 bytes,
 including worst-case control-structure alignment padding; `sh264e_encoder_destroy`
 does not free caller-owned arena memory.
 The arena-backed production path now uses MCU-row streaming by default. It keeps only NanoJPEG's current MCU-row buffers and the retained row cache, then feeds one scaled output slice at a time to the progressive encoder.
-The printed peak allocation includes the streaming row cache and MCU-row temp buffers; it excludes caller-owned JPEG input, arena header overhead, slice-work, H.264 output buffers, and NanoJPEG's compact in-context Huffman metadata.
+The printed peak allocation includes the streaming row cache and MCU-row temp buffers; it excludes caller-owned JPEG input, arena header overhead, slice-work, H.264 output buffers, NanoJPEG's compact in-context Huffman metadata, and the fixed 512-byte compressed-input parser window in the NanoJPEG context.
 Diagnostic-only JPEG allocation-limit and streaming-prototype hooks are gated by `SH264E_ENABLE_JPEG_TEST_HOOKS` and declared in `tests/sh264e_jpeg_test_hooks.h`; they are not normal application APIs.
 All public JPEG entry points must use the MCU-row streaming decode path. The
 heap-backed convenience wrapper may remain non-deterministic in allocation
@@ -230,10 +238,13 @@ JPEG pipeline entry points:
 
 * `sh264e_jpeg_get_slice_buffer_size`
 * `sh264e_jpeg_get_slice_work_size`
+* `sh264e_jpeg_source_get_slice_work_size`
 * `sh264e_jpeg_get_work_size`
+* `sh264e_jpeg_source_get_work_size`
 * `sh264e_encode_jpeg_idr`
 * `sh264e_encode_jpeg_idr_with_arena`
 * `sh264e_encode_jpeg_idr_with_arena_stream`
+* `sh264e_encode_jpeg_source_idr_with_arena_stream`
 
 Diagnostic/stat entry points:
 

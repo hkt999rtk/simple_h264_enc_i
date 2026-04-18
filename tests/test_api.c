@@ -169,6 +169,7 @@ int main(void)
     sh264e_encoder_t *arena_encoder = NULL;
     sh264e_jpeg_allocation_stats_t jpeg_alloc_stats;
     sh264e_encoder_memory_report_t encoder_memory_report;
+    sh264e_jpeg_source_t bad_jpeg_source;
     int ok = 1;
 
     memset(&config, 0, sizeof(config));
@@ -285,6 +286,26 @@ int main(void)
                         sh264e_jpeg_get_slice_work_size((const uint8_t *)"x", 1u,
                                                         (sh264e_pixfmt_t)99, &jpeg_work_size),
                         SH264E_ERR_UNSUPPORTED_CONFIG);
+    memset(&bad_jpeg_source, 0, sizeof(bad_jpeg_source));
+    ok &= expect_status("null JPEG source work-size input",
+                        sh264e_jpeg_source_get_work_size(NULL, &jpeg_work_size),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("null JPEG source work-size reader",
+                        sh264e_jpeg_source_get_work_size(&bad_jpeg_source, &jpeg_work_size),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("null JPEG source work-size output",
+                        sh264e_jpeg_source_get_work_size(&bad_jpeg_source, NULL),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("null JPEG source slice-work input",
+                        sh264e_jpeg_source_get_slice_work_size(NULL,
+                                                               SH264E_PIXFMT_I420,
+                                                               &jpeg_work_size),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("unsupported JPEG source slice-work format",
+                        sh264e_jpeg_source_get_slice_work_size(&bad_jpeg_source,
+                                                               (sh264e_pixfmt_t)99,
+                                                               &jpeg_work_size),
+                        SH264E_ERR_UNSUPPORTED_CONFIG);
     ok &= expect_status("null JPEG arena encode",
                         sh264e_encode_jpeg_idr_with_arena(NULL, NULL, 0u, NULL, 0u,
                                                           NULL, 0u, NULL, 0u, NULL),
@@ -292,6 +313,13 @@ int main(void)
     ok &= expect_status("null JPEG stream consumer",
                         sh264e_encode_jpeg_idr_with_arena_stream(NULL, NULL, 0u, NULL, 0u,
                                                                  NULL, 0u, NULL, 0u, NULL, NULL),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("null JPEG source stream consumer",
+                        sh264e_encode_jpeg_source_idr_with_arena_stream(NULL, NULL,
+                                                                        NULL, 0u,
+                                                                        NULL, 0u,
+                                                                        NULL, 0u,
+                                                                        NULL, NULL),
                         SH264E_ERR_INVALID_ARGUMENT);
     jpeg_alloc_stats.current_bytes = 123u;
     jpeg_alloc_stats.peak_bytes = 456u;

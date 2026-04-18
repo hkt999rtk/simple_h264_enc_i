@@ -123,9 +123,20 @@ typedef struct sh264e_jpeg_alloc_header_t {
 } sh264e_jpeg_alloc_header_t;
 
 typedef int (*nj_mcu_row_callback_t)(int mcu_y, void *user);
+typedef int (*nj_input_read_callback_t)(void *user,
+                                        unsigned char *dst,
+                                        int requested,
+                                        int *out_read);
+typedef struct nj_input_source_t {
+    nj_input_read_callback_t read;
+    void *user;
+} nj_input_source_t;
 
 void njInit(void);
 int njDecodeMcuRows(const void *jpeg, const int size, nj_mcu_row_callback_t callback, void *user);
+int njDecodeMcuRowsFromSource(const nj_input_source_t *source,
+                              nj_mcu_row_callback_t callback,
+                              void *user);
 int njGetWidth(void);
 int njGetHeight(void);
 int njGetComponentCount(void);
@@ -166,6 +177,7 @@ static sh264e_status_t sh264e_encode_idr_slice_to_consumer(sh264e_encoder_t *enc
 static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *encoder,
                                                              const uint8_t *jpeg_data,
                                                              size_t jpeg_size,
+                                                             const sh264e_jpeg_source_t *jpeg_source,
                                                              uint8_t *jpeg_arena,
                                                              size_t jpeg_arena_size,
                                                              int use_arena,
@@ -2315,8 +2327,90 @@ sh264e_status_t sh264e_jpeg_get_last_allocation_stats(sh264e_jpeg_allocation_sta
     return SH264E_OK;
 }
 
+typedef struct sh264e_nj_source_adapter_t {
+    const sh264e_jpeg_source_t *source;
+    sh264e_status_t status;
+} sh264e_nj_source_adapter_t;
+
+static int sh264e_nj_source_read(void *user,
+                                 unsigned char *dst,
+                                 int requested,
+                                 int *out_read)
+{
+    sh264e_nj_source_adapter_t *adapter = (sh264e_nj_source_adapter_t *)user;
+    sh264e_jpeg_read_fn source_reader;
+    size_t read_bytes = 0u;
+    sh264e_status_t status;
+
+    if (adapter == NULL || adapter->source == NULL || adapter->source->read == NULL ||
+        dst == NULL || requested <= 0 || out_read == NULL) {
+        if (adapter != NULL) {
+            adapter->status = SH264E_ERR_INVALID_ARGUMENT;
+        }
+        return -1;
+    }
+
+    source_reader = adapter->source->read;
+    status = source_reader(adapter->source->user,
+                           dst,
+                           (size_t)requested,
+                           &read_bytes);
+    if (status != SH264E_OK) {
+        adapter->status = status;
+        return -1;
+    }
+    if (read_bytes > (size_t)requested) {
+        adapter->status = SH264E_ERR_INVALID_ARGUMENT;
+        return -1;
+    }
+    *out_read = (int)read_bytes;
+    return 0;
+}
+
+static sh264e_status_t decode_mcu_rows_from_input(const uint8_t *jpeg_data,
+                                                  size_t jpeg_size,
+                                                  const sh264e_jpeg_source_t *jpeg_source,
+                                                  nj_mcu_row_callback_t callback,
+                                                  void *user,
+                                                  sh264e_status_t *source_status)
+{
+    if (source_status != NULL) {
+        *source_status = SH264E_OK;
+    }
+    if (jpeg_source != NULL) {
+        sh264e_nj_source_adapter_t adapter;
+        nj_input_source_t nj_source;
+
+        if (jpeg_source->read == NULL) {
+            return SH264E_ERR_INVALID_ARGUMENT;
+        }
+        adapter.source = jpeg_source;
+        adapter.status = SH264E_OK;
+        nj_source.read = sh264e_nj_source_read;
+        nj_source.user = &adapter;
+        {
+            sh264e_status_t status = map_jpeg_result(
+                njDecodeMcuRowsFromSource(&nj_source, callback, user));
+            if (adapter.status != SH264E_OK) {
+                status = adapter.status;
+            }
+            if (source_status != NULL) {
+                *source_status = adapter.status;
+            }
+            return status;
+        }
+    }
+
+    if (jpeg_data == NULL || jpeg_size == 0u || jpeg_size > (size_t)INT_MAX) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    return map_jpeg_result(njDecodeMcuRows(jpeg_data, (int)jpeg_size,
+                                           callback, user));
+}
+
 static sh264e_status_t jpeg_measure_streaming_requirements(const uint8_t *jpeg_data,
                                                            size_t jpeg_size,
+                                                           const sh264e_jpeg_source_t *jpeg_source,
                                                            sh264e_pixfmt_t pixfmt,
                                                            size_t *out_arena_size,
                                                            size_t *out_slice_work_size)
@@ -2324,7 +2418,8 @@ static sh264e_status_t jpeg_measure_streaming_requirements(const uint8_t *jpeg_d
     sh264e_jpeg_stream_context_t ctx;
     sh264e_status_t status;
 
-    if (jpeg_data == NULL || (out_arena_size == NULL && out_slice_work_size == NULL)) {
+    if ((jpeg_data == NULL && jpeg_source == NULL) ||
+        (out_arena_size == NULL && out_slice_work_size == NULL)) {
         return SH264E_ERR_INVALID_ARGUMENT;
     }
     if (!is_supported_pixfmt(pixfmt)) {
@@ -2338,7 +2433,7 @@ static sh264e_status_t jpeg_measure_streaming_requirements(const uint8_t *jpeg_d
     }
     sh264e_jpeg_streaming_last_cache_bytes = 0u;
     sh264e_jpeg_streaming_last_slice_work_bytes = 0u;
-    if (jpeg_size == 0u || jpeg_size > (size_t)INT_MAX) {
+    if (jpeg_source == NULL && (jpeg_size == 0u || jpeg_size > (size_t)INT_MAX)) {
         return SH264E_ERR_INVALID_ARGUMENT;
     }
 
@@ -2349,8 +2444,8 @@ static sh264e_status_t jpeg_measure_streaming_requirements(const uint8_t *jpeg_d
 
     jpeg_allocation_begin_heap();
     njInit();
-    status = map_jpeg_result(njDecodeMcuRows(jpeg_data, (int)jpeg_size,
-                                             streaming_mcu_row_ready, &ctx));
+    status = decode_mcu_rows_from_input(jpeg_data, jpeg_size, jpeg_source,
+                                        streaming_mcu_row_ready, &ctx, NULL);
     if (ctx.status != SH264E_OK) {
         status = ctx.status;
     }
@@ -2375,6 +2470,7 @@ static sh264e_status_t jpeg_get_streaming_work_size(const uint8_t *jpeg_data,
                                                     size_t *out_size)
 {
     return jpeg_measure_streaming_requirements(jpeg_data, jpeg_size,
+                                               NULL,
                                                SH264E_PIXFMT_I420,
                                                out_size, NULL);
 }
@@ -2392,6 +2488,26 @@ sh264e_status_t sh264e_jpeg_get_slice_work_size(const uint8_t *jpeg_data,
                                                 size_t *out_size)
 {
     return jpeg_measure_streaming_requirements(jpeg_data, jpeg_size,
+                                               NULL,
+                                               pixfmt,
+                                               NULL, out_size);
+}
+
+sh264e_status_t sh264e_jpeg_source_get_work_size(const sh264e_jpeg_source_t *source,
+                                                 size_t *out_size)
+{
+    return jpeg_measure_streaming_requirements(NULL, 0u,
+                                               source,
+                                               SH264E_PIXFMT_I420,
+                                               out_size, NULL);
+}
+
+sh264e_status_t sh264e_jpeg_source_get_slice_work_size(const sh264e_jpeg_source_t *source,
+                                                       sh264e_pixfmt_t pixfmt,
+                                                       size_t *out_size)
+{
+    return jpeg_measure_streaming_requirements(NULL, 0u,
+                                               source,
                                                pixfmt,
                                                NULL, out_size);
 }
@@ -2415,6 +2531,7 @@ sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
                                        size_t *out_size)
 {
     return sh264e_encode_jpeg_idr_streaming_impl(encoder, jpeg_data, jpeg_size,
+                                                 NULL,
                                                  NULL, 0u, 0,
                                                  work_buffer, work_buffer_capacity,
                                                  out, out_capacity, out_size,
@@ -2433,6 +2550,7 @@ sh264e_status_t sh264e_encode_jpeg_idr_with_arena(sh264e_encoder_t *encoder,
                                                   size_t *out_size)
 {
     return sh264e_encode_jpeg_idr_streaming_impl(encoder, jpeg_data, jpeg_size,
+                                                 NULL,
                                                  jpeg_arena, jpeg_arena_size, 1,
                                                  work_buffer, work_buffer_capacity,
                                                  out, out_capacity, out_size,
@@ -2458,6 +2576,33 @@ sh264e_status_t sh264e_encode_jpeg_idr_with_arena_stream(
         return SH264E_ERR_INVALID_ARGUMENT;
     }
     return sh264e_encode_jpeg_idr_streaming_impl(encoder, jpeg_data, jpeg_size,
+                                                 NULL,
+                                                 jpeg_arena, jpeg_arena_size, 1,
+                                                 work_buffer, work_buffer_capacity,
+                                                 out_buffer, out_buffer_capacity,
+                                                 &ignored_size,
+                                                 consumer, consumer_user);
+}
+
+sh264e_status_t sh264e_encode_jpeg_source_idr_with_arena_stream(
+    sh264e_encoder_t *encoder,
+    const sh264e_jpeg_source_t *source,
+    uint8_t *jpeg_arena,
+    size_t jpeg_arena_size,
+    uint8_t *work_buffer,
+    size_t work_buffer_capacity,
+    uint8_t *out_buffer,
+    size_t out_buffer_capacity,
+    sh264e_output_consumer_t consumer,
+    void *consumer_user)
+{
+    size_t ignored_size = 0u;
+
+    if (consumer == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    return sh264e_encode_jpeg_idr_streaming_impl(encoder, NULL, 0u,
+                                                 source,
                                                  jpeg_arena, jpeg_arena_size, 1,
                                                  work_buffer, work_buffer_capacity,
                                                  out_buffer, out_buffer_capacity,
@@ -2478,6 +2623,7 @@ size_t sh264e_jpeg_get_last_slice_work_bytes(void)
 static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *encoder,
                                                              const uint8_t *jpeg_data,
                                                              size_t jpeg_size,
+                                                             const sh264e_jpeg_source_t *jpeg_source,
                                                              uint8_t *jpeg_arena,
                                                              size_t jpeg_arena_size,
                                                              int use_arena,
@@ -2492,7 +2638,8 @@ static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *e
     sh264e_jpeg_stream_context_t ctx;
     sh264e_status_t status;
 
-    if (encoder == NULL || jpeg_data == NULL || out == NULL || out_size == NULL) {
+    if (encoder == NULL || (jpeg_data == NULL && jpeg_source == NULL) ||
+        out == NULL || out_size == NULL) {
         return SH264E_ERR_INVALID_ARGUMENT;
     }
     *out_size = 0u;
@@ -2501,7 +2648,7 @@ static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *e
     if (encoder_idr_active(encoder)) {
         return SH264E_ERR_BAD_STATE;
     }
-    if (jpeg_size == 0u || jpeg_size > (size_t)INT_MAX) {
+    if (jpeg_source == NULL && (jpeg_size == 0u || jpeg_size > (size_t)INT_MAX)) {
         return SH264E_ERR_INVALID_ARGUMENT;
     }
     if (use_arena != 0 && (jpeg_arena == NULL || jpeg_arena_size == 0u)) {
@@ -2524,8 +2671,8 @@ static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *e
         jpeg_allocation_begin_heap();
     }
     njInit();
-    status = map_jpeg_result(njDecodeMcuRows(jpeg_data, (int)jpeg_size,
-                                             streaming_mcu_row_ready, &ctx));
+    status = decode_mcu_rows_from_input(jpeg_data, jpeg_size, jpeg_source,
+                                        streaming_mcu_row_ready, &ctx, NULL);
     if (ctx.status != SH264E_OK) {
         status = ctx.status;
     }
@@ -2563,6 +2710,7 @@ sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype(sh264e_encoder_t *enc
                                                            size_t *out_size)
 {
     return sh264e_encode_jpeg_idr_streaming_impl(encoder, jpeg_data, jpeg_size,
+                                                 NULL,
                                                  NULL, 0u, 0,
                                                  work_buffer, work_buffer_capacity,
                                                  out, out_capacity, out_size,
@@ -2581,6 +2729,7 @@ sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype_with_arena(sh264e_enc
                                                                       size_t *out_size)
 {
     return sh264e_encode_jpeg_idr_streaming_impl(encoder, jpeg_data, jpeg_size,
+                                                 NULL,
                                                  jpeg_arena, jpeg_arena_size, 1,
                                                  work_buffer, work_buffer_capacity,
                                                  out, out_capacity, out_size,
