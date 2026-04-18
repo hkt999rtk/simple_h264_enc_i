@@ -4,6 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef SH264E_ENABLE_JPEG_TEST_HOOKS
+#define SH264E_ENABLE_JPEG_TEST_HOOKS 0
+#endif
+
 #define NJ_OK 0
 #define NJ_NO_JPEG 1
 #define NJ_UNSUPPORTED 2
@@ -169,11 +173,6 @@ static void jpeg_allocation_stats_reset(void)
     sh264e_jpeg_alloc_arena_offset = 0u;
     sh264e_jpeg_alloc_peak_arena_bytes = 0u;
     sh264e_jpeg_alloc_arena_failed = 0u;
-}
-
-void sh264e_jpeg_set_test_allocation_limit(size_t max_bytes)
-{
-    sh264e_jpeg_alloc_limit = max_bytes;
 }
 
 static size_t jpeg_alloc_alignment(void)
@@ -2002,6 +2001,15 @@ sh264e_status_t sh264e_jpeg_get_work_size(const uint8_t *jpeg_data,
     return jpeg_get_streaming_work_size(jpeg_data, jpeg_size, out_size);
 }
 
+#if SH264E_ENABLE_JPEG_TEST_HOOKS
+
+void sh264e_jpeg_set_test_allocation_limit(size_t max_bytes)
+{
+    sh264e_jpeg_alloc_limit = max_bytes;
+}
+
+#endif
+
 sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
                                        const uint8_t *jpeg_data,
                                        size_t jpeg_size,
@@ -2065,13 +2073,6 @@ sh264e_status_t sh264e_encode_jpeg_idr_with_arena_stream(
 size_t sh264e_jpeg_get_last_streaming_cache_bytes(void)
 {
     return sh264e_jpeg_streaming_last_cache_bytes;
-}
-
-sh264e_status_t sh264e_jpeg_get_streaming_work_size(const uint8_t *jpeg_data,
-                                                    size_t jpeg_size,
-                                                    size_t *out_size)
-{
-    return jpeg_get_streaming_work_size(jpeg_data, jpeg_size, out_size);
 }
 
 static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *encoder,
@@ -2156,6 +2157,8 @@ static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *e
     return status;
 }
 
+#if SH264E_ENABLE_JPEG_TEST_HOOKS
+
 sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype(sh264e_encoder_t *encoder,
                                                            const uint8_t *jpeg_data,
                                                            size_t jpeg_size,
@@ -2189,6 +2192,8 @@ sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype_with_arena(sh264e_enc
                                                  out, out_capacity, out_size,
                                                  NULL, NULL);
 }
+
+#endif
 
 sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,
                                       sh264e_encoder_t **out_encoder)

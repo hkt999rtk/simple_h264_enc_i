@@ -5,6 +5,14 @@ project(simple_h264_enc_i VERSION 0.1.0 LANGUAGES C)
 option(SH264E_BUILD_TOOLS "Build command-line tools" ON)
 option(SH264E_BUILD_TESTS "Build tests" ON)
 option(SH264E_BUILD_QEMU_TESTS "Build Cortex-M QEMU firmware tests when the toolchain is usable" ON)
+if(NOT DEFINED SH264E_ENABLE_JPEG_TEST_HOOKS)
+    set(SH264E_ENABLE_JPEG_TEST_HOOKS ${SH264E_BUILD_TESTS})
+endif()
+set(SH264E_ENABLE_JPEG_TEST_HOOKS ${SH264E_ENABLE_JPEG_TEST_HOOKS} CACHE BOOL
+    "Build private JPEG diagnostic/test hooks used by regression tools")
+if(SH264E_BUILD_TESTS AND NOT SH264E_ENABLE_JPEG_TEST_HOOKS)
+    message(FATAL_ERROR "SH264E_BUILD_TESTS requires SH264E_ENABLE_JPEG_TEST_HOOKS")
+endif()
 
 add_library(simple_h264_enc_i STATIC
     src/sh264e.c
@@ -17,6 +25,10 @@ target_include_directories(simple_h264_enc_i
 )
 
 target_compile_features(simple_h264_enc_i PUBLIC c_std_99)
+
+if(SH264E_ENABLE_JPEG_TEST_HOOKS)
+    target_compile_definitions(simple_h264_enc_i PRIVATE SH264E_ENABLE_JPEG_TEST_HOOKS=1)
+endif()
 
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(simple_h264_enc_i PRIVATE
@@ -61,6 +73,12 @@ if(SH264E_BUILD_TOOLS)
     )
     target_link_libraries(sh264e_encode_jpeg PRIVATE simple_h264_enc_i)
     target_compile_features(sh264e_encode_jpeg PRIVATE c_std_99)
+    if(SH264E_ENABLE_JPEG_TEST_HOOKS)
+        target_compile_definitions(sh264e_encode_jpeg PRIVATE SH264E_ENABLE_JPEG_TEST_HOOKS=1)
+        target_include_directories(sh264e_encode_jpeg PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        )
+    endif()
 
     if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(sh264e_encode_file PRIVATE
@@ -146,6 +164,12 @@ if(SH264E_BUILD_TESTS)
         COMMAND ${CMAKE_COMMAND}
             -DSH264E_SRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}/src
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_jpeg_no_rgb_path.cmake
+    )
+    add_test(
+        NAME sh264e_jpeg_diagnostics_boundary
+        COMMAND ${CMAKE_COMMAND}
+            -DSH264E_PROJECT_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_jpeg_diagnostics_boundary.cmake
     )
 
     find_package(Python3 COMPONENTS Interpreter)

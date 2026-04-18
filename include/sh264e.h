@@ -119,6 +119,8 @@ sh264e_status_t sh264e_jpeg_get_work_size(const uint8_t *jpeg_data,
 
 sh264e_status_t sh264e_jpeg_get_last_allocation_stats(sh264e_jpeg_allocation_stats_t *out_stats);
 
+size_t sh264e_jpeg_get_last_streaming_cache_bytes(void);
+
 sh264e_status_t sh264e_encode_jpeg_idr(sh264e_encoder_t *encoder,
                                        const uint8_t *jpeg_data,
                                        size_t jpeg_size,

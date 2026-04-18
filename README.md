@@ -123,9 +123,10 @@ Encode a baseline JPEG memory-input path through the library wrapper:
 
 The JPEG path uses NanoJPEG inside the core library. The tool only reads the JPEG file and writes the `.h264` output; the library API accepts a caller-provided JPEG byte buffer and emits complete Annex B chunks through caller-owned output memory.
 The tool sizes a caller-provided JPEG decoder arena with `sh264e_jpeg_get_work_size`, passes that arena to `sh264e_encode_jpeg_idr_with_arena_stream`, and prints the arena requirement plus current and peak NanoJPEG allocation bytes reported by `sh264e_jpeg_get_last_allocation_stats`.
+The public diagnostic surface also exposes `sh264e_jpeg_get_last_streaming_cache_bytes` so tools and regression tests can report decoded-row cache usage without private declarations.
 The arena-backed production path now uses MCU-row streaming by default. It keeps only NanoJPEG's current MCU-row buffers and the retained row cache, then feeds one scaled output slice at a time to the progressive encoder.
 The printed peak allocation includes the streaming row cache and MCU-row temp buffers; it excludes caller-owned JPEG input, arena header overhead, slice-work, H.264 output buffers, and NanoJPEG's compact in-context Huffman metadata.
-The hidden `--streaming-prototype` flag remains as a debug/comparison path for the same MCU-row streaming machinery.
+Diagnostic-only JPEG allocation-limit and streaming-prototype hooks are gated by `SH264E_ENABLE_JPEG_TEST_HOOKS` and declared in `tests/sh264e_jpeg_test_hooks.h`; they are not normal application APIs.
 All public JPEG entry points must use the MCU-row streaming decode path. The
 heap-backed convenience wrapper may remain non-deterministic in allocation
 placement, but it must not decode the JPEG into a full RGB, grayscale, Y, Cb, or

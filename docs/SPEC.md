@@ -327,6 +327,8 @@ sh264e_jpeg_get_slice_buffer_size
 sh264e_encode_jpeg_idr
 sh264e_encode_jpeg_idr_with_arena
 sh264e_encode_jpeg_idr_with_arena_stream
+sh264e_jpeg_get_last_allocation_stats
+sh264e_jpeg_get_last_streaming_cache_bytes
 ```
 
 The JPEG APIs accept a caller-provided JPEG byte buffer. File I/O remains outside the library.
@@ -353,6 +355,14 @@ typedef sh264e_status_t (*sh264e_output_consumer_t)(
 ```
 
 The streaming-output JPEG API should use a reusable caller-provided output chunk buffer sized for `max(header, one slice)`, call the consumer once for SPS/PPS and once per IDR slice, and stop deterministically if the consumer returns an error. The library must not call file APIs; tools/tests may implement a consumer that writes to a file.
+
+`sh264e_jpeg_get_last_allocation_stats` reports the current and peak tracked
+JPEG allocations from the last JPEG work-size query or encode call.
+`sh264e_jpeg_get_last_streaming_cache_bytes` reports the decoded row-cache
+capacity retained by the last MCU-row streaming query or encode call. These are
+diagnostic/stat APIs for regression reporting; allocation-limit and
+streaming-prototype hooks remain private test hooks gated by
+`SH264E_ENABLE_JPEG_TEST_HOOKS`.
 
 NanoJPEG decodes baseline JPEG through MCU-row streaming. The library scales decoded component rows directly into one YUV420 encoder slice at a time:
 
