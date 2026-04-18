@@ -6,12 +6,14 @@ This project is intentionally small and narrow in scope:
 
 * C static library built with CMake
 * Single-frame IDR-only H.264 output
-* Annex B bitstream output: SPS, PPS, 90 IDR slices
+* Current Annex B bitstream output: SPS, PPS, 90 row IDR slices
+* Planned independent-MB output: SPS, PPS, 14,400 independent MB IDR slices
 * Fixed v1 resolution: 2560x1440
 * 8-bit YUV420 input: I420 or NV12
 * Baseline / Constrained Baseline compatible CAVLC bitstream
 * No file I/O inside the encoder library
-* Progressive slice API for lower SRAM footprint and input bandwidth
+* Progressive input-row API for lower SRAM footprint and input bandwidth
+* Planned independent macroblock slice mode with no reconstructed-neighbor reference
 * Core fixed-point bilinear scaler for resizing source YUV420 into encoder slices
 * Core memory-input and source-input baseline JPEG decode path via NanoJPEG
 
@@ -264,7 +266,7 @@ The output bitstream buffer is owned by the caller.
 
 Progressive mode is the preferred v1 interface.
 
-Each `sh264e_encode_idr_slice` call consumes one horizontal macroblock row:
+Each `sh264e_encode_idr_slice` call consumes one horizontal macroblock input row:
 
 * Y: `2560 x 16`
 * I420 U/V: `1280 x 8` each
@@ -278,13 +280,16 @@ sh264e_begin_idr
 sh264e_end_idr
 ```
 
-`sh264e_begin_idr` emits SPS/PPS. Each slice call emits one IDR slice NALU. `sh264e_end_idr` validates completion and emits no bytes in v1.
+`sh264e_begin_idr` emits SPS/PPS. The current implementation emits one row
+slice per input-row call. The planned independent-MB mode keeps the same 90
+input-row calls, but each row call emits 160 one-macroblock IDR slice NALUs.
+`sh264e_end_idr` validates completion and emits no bytes.
 
 The legacy frame API remains available and internally offsets full-frame planes into 90 progressive slice calls.
 
 ## Current Limits
 
-v1 deliberately does not support:
+The current minimal encoder deliberately does not support:
 
 * arbitrary resolutions
 * multiple frames
@@ -294,3 +299,7 @@ v1 deliberately does not support:
 * rate control
 * chroma AC or full multi-coefficient residual coding
 * deblocking tuning
+
+The planned independent-MB mode additionally removes reconstructed-neighbor
+intra prediction and the associated reconstructed luma/chroma and neighbor
+state buffers.

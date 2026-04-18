@@ -135,14 +135,14 @@ Progressive slice mode is the preferred v1 library interface. Frame mode (`sh264
 * Bitstream format:
 
   * Annex B (start code: `0x000001`)
-* Frame-mode output structure:
+* Target independent-MB output structure:
 
   ```
   SPS
   PPS
-  IDR Slice[0]
+  IDR Slice[MB 0]
   ...
-  IDR Slice[89]
+  IDR Slice[MB 14399]
   ```
 
 ---
@@ -182,13 +182,24 @@ Exactly **90** slice calls are required for a 2560x1440 frame.
 ```
 SPS
 PPS
-IDR Slice[0]
-IDR Slice[1]
+IDR Slice[MB 0]
+IDR Slice[MB 1]
 ...
-IDR Slice[89]
+IDR Slice[MB 14399]
 ```
 
-`sh264e_begin_idr` emits SPS/PPS. Each `sh264e_encode_idr_slice` call emits one complete IDR slice NALU. `sh264e_end_idr` emits no bitstream in v1; it validates that exactly 90 slices were submitted and resets the progressive frame state.
+`sh264e_begin_idr` emits SPS/PPS. `sh264e_end_idr` emits no bitstream in v1; it validates that exactly 90 input rows were submitted and resets the progressive frame state.
+
+The target independent-MB mode keeps the public progressive input call sequence
+but changes H.264 slice granularity:
+
+* `sh264e_encode_idr_slice` still consumes one horizontal macroblock input row.
+* Each input-row call emits **160** complete IDR slice NALUs.
+* Each emitted H.264 slice contains exactly one 16x16 macroblock.
+* A full frame emits **14,400** IDR slice NALUs.
+
+This distinction is important: an API input slice is one macroblock row, while
+an H.264 bitstream slice is one independent macroblock NALU.
 
 ### Slice Indexing
 
@@ -196,7 +207,7 @@ The encoder owns the progressive slice index.
 
 * Caller must submit slices in top-to-bottom raster order
 * Caller does not pass a slice index
-* `first_mb_in_slice = slice_index * 160`
+* Target independent-MB mode: `first_mb_in_slice = row_index * 160 + mb_x`
 * A 91st slice call must fail
 * Calling slice encode before `sh264e_begin_idr` must fail
 * Calling `sh264e_end_idr` before all 90 slices are encoded must fail
@@ -483,7 +494,9 @@ Input YUV Slice
    ↓
 Macroblock Partition (16x16)
    ↓
-Intra Prediction (DC only)
+Independent MB Slice Partition (one H.264 slice per MB)
+   ↓
+Fixed Boundary Prediction (no neighbor reference)
    ↓
 Residual Calculation
    ↓
@@ -514,22 +527,18 @@ NALU Packaging
 
 #### Supported Modes:
 
-* **DC Prediction ONLY**
+* **Independent unavailable-neighbor DC-style prediction only**
 
 #### Rules:
 
-* Use average of:
-
-  * Top pixels (if available)
-  * Left pixels (if available)
-* If unavailable (top/left boundary):
-
-  * Use constant value (e.g. 128)
-* Progressive slice boundaries are real H.264 slice boundaries:
-
-  * Intra prediction must not cross from a previous slice row
-  * Left prediction inside the current slice is allowed
-  * Top prediction is available only within the same slice when applicable
+* Target mode emits one H.264 slice per macroblock.
+* Left and top macroblocks are outside the current H.264 slice, so they are
+  unavailable to the decoder.
+* Encoder must not read or write reconstructed-neighbor samples.
+* Encoder must not retain reconstructed luma/chroma slice buffers for
+  prediction.
+* Encoder should use the same fixed unavailable-neighbor boundary predictor that
+  the decoder will use, effectively a constant baseline such as 128.
 
 ---
 
@@ -575,7 +584,7 @@ NALU Packaging
 * PPS (nal_unit_type = 8)
 * IDR Slice (nal_unit_type = 5)
 
-Progressive mode emits one IDR slice NALU per macroblock row.
+Target independent-MB mode emits one IDR slice NALU per macroblock.
 
 #### Constraints:
 
@@ -591,7 +600,8 @@ The following features are explicitly NOT supported:
 * ❌ P-frame / B-frame
 * ❌ Motion estimation
 * ❌ Mode decision (no SAD)
-* ❌ Multiple intra modes (only DC)
+* ❌ Reconstructed-neighbor intra prediction
+* ❌ Multiple intra modes (independent unavailable-neighbor DC-style only)
 * ❌ CABAC
 * ❌ Rate control
 * ❌ Deblocking filter tuning (can be disabled or default)
@@ -628,12 +638,9 @@ The generated bitstream must:
 
   * Frame wrapper may require full-frame input buffering by the caller
   * Progressive mode must not require full-frame input buffering
-  * Progressive internal reconstructed storage should be limited to slice-local state:
-
-    * Luma: `2560 * 16`
-    * Chroma U: `1280 * 8`
-    * Chroma V: `1280 * 8`
-    * Neighbor/nonzero state: `640 * 4`
+  * Target independent-MB mode should not require reconstructed luma/chroma
+    slice storage.
+  * Target independent-MB mode should not require neighbor/nonzero state.
 
 ---
 
@@ -660,9 +667,9 @@ The generated bitstream must:
   ```
   SPS
   PPS
-  IDR Slice[0]
+  IDR Slice[MB 0]
   ...
-  IDR Slice[89]
+  IDR Slice[MB 14399]
   ```
 * Verify:
 
@@ -678,8 +685,8 @@ The generated bitstream must:
 
   * SPS/PPS correctness
   * Slice header correctness
-  * Exactly 90 IDR slice NALUs for one 2560x1440 progressive frame
-  * `first_mb_in_slice = slice_index * 160`
+  * Exactly 14,400 IDR slice NALUs for one 2560x1440 progressive frame
+  * `first_mb_in_slice = 0..14399`
 
 ### 9.3 Progressive API Sequence Test
 

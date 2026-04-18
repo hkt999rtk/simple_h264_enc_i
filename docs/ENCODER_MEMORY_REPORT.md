@@ -3,6 +3,10 @@
 Issue #50 records the fixed-v1 encoder heap breakdown used by the memory
 optimization roadmap.
 
+This report is the pre-independent-MB baseline. The planned independent
+macroblock slice mode should remove reconstructed-neighbor prediction and make
+the reconstructed luma/chroma and neighbor/nonzero blocks unnecessary.
+
 ## Fixed V1 Breakdown
 
 For the supported `2560x1440` progressive IDR configuration, one encoder
@@ -20,6 +24,21 @@ instance reports:
 
 The previously documented `about 191,024` byte budget was an estimate. The
 measured current 64-bit host total is `191,048` bytes.
+
+## Independent-MB Target
+
+The independent macroblock slice mode should eliminate these blocks:
+
+| Block | Current bytes | Target |
+| --- | ---: | ---: |
+| Reconstructed luma slice | 40,960 | 0 |
+| Reconstructed chroma slices | 20,480 | 0 |
+| Neighbor/nonzero state | 2,560 | 0 |
+| Removable subtotal | 64,000 | 0 |
+
+The target bitstream emits one H.264 slice per macroblock so the decoder treats
+left/top macroblocks as unavailable. Encoder-side reconstructed-neighbor
+prediction and CAVLC neighbor context are therefore removed.
 
 ## Scope
 

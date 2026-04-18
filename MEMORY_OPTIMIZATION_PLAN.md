@@ -10,6 +10,12 @@ This document is the planning source for issues #48 through #54. Developers
 working on those issues must fetch the latest `main` and read this file before
 implementation.
 
+The next encoder-direction change is tracked in
+`INDEPENDENT_MB_MODE_PLAN.md`: move from row-slice reconstructed-neighbor intra
+prediction to one H.264 slice per macroblock, with no reconstructed-neighbor
+reference. That plan is expected to remove about 64,000 bytes from encoder-owned
+state before any further bitstream scratch reductions.
+
 ## Current Budget
 
 Current `2560x1440` 4:2:0 embedded budget, excluding compressed JPEG input
@@ -26,6 +32,15 @@ storage and `.rodata`:
 
 The old full decoded JPEG component-frame allocation was 5,529,600 bytes for
 `2560x1440` 4:2:0 and is no longer allowed for public JPEG APIs.
+
+Independent-MB target adjustment:
+
+| Block | Current bytes | Independent-MB target |
+| --- | ---: | ---: |
+| Reconstructed luma slice | 40,960 | 0 |
+| Reconstructed chroma slices | 20,480 | 0 |
+| Neighbor/nonzero state | 2,560 | 0 |
+| Encoder removable subtotal | 64,000 | 0 |
 
 ## Issue Dependency Graph
 
