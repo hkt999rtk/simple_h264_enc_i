@@ -62,6 +62,12 @@ misaligned caller memory by aligning the opaque encoder control structure inside
 the supplied block, then carving the byte-addressed encoder work buffers after
 it. `sh264e_encoder_destroy` resets no caller memory and does not free the arena.
 
+Future Cortex-M optimization issues are tracked in
+`docs/CORTEX_M_OPTIMIZATION_PLAN.md`. Any change that alters the encoder arena
+size, bitstream scratch size, or reported sub-block composition must update this
+report, the public diagnostic output, and the regression tests in the same
+change. Cortex-M fast paths should not add persistent encoder SRAM by default.
+
 The JPEG tool prints the same report:
 
 ```text

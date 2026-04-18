@@ -33,6 +33,12 @@ storage and `.rodata`:
 The old full decoded JPEG component-frame allocation was 5,529,600 bytes for
 `2560x1440` 4:2:0 and is no longer allowed for public JPEG APIs.
 
+Cortex-M4/M7 optimization work is tracked in
+`docs/CORTEX_M_OPTIMIZATION_PLAN.md`. Those follow-up issues must not increase
+the persistent encoder, JPEG, scaler, or output-buffer memory budget unless the
+issue explicitly allows it and updates this document plus the relevant
+regression tests.
+
 Independent-MB memory result:
 
 | Block | Former bytes | Current bytes |

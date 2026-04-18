@@ -201,6 +201,12 @@ The QEMU benchmark preflight targets are:
 QEMU validates firmware build/run behavior and stable nonzero `sh264e_bench_checksum`. Treat `sh264e_bench_cycles` from QEMU as a preflight signal only; final tuning-quality cycle counts still need real Cortex-M hardware with documented CPU, clock, compiler flags, cache state, and memory placement.
 Use `docs/CORTEX_M_SCALER_BENCHMARKS.md` as the capture checklist and result table for real-board portable C versus DSP measurements.
 
+The Cortex-M4/M7 optimization roadmap is tracked in
+`docs/CORTEX_M_OPTIMIZATION_PLAN.md`. Implementation work must wait for its
+documented baseline dependencies, preserve public APIs by default, keep
+portable C fallbacks for guarded DSP paths, and avoid persistent SRAM growth
+unless the issue explicitly allows it.
+
 Validate with ffmpeg:
 
 ```sh

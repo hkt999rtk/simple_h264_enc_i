@@ -301,6 +301,17 @@ The library scaler implementation must use fixed-point integer arithmetic for co
 
 When compiled for ARM cores with the DSP extension, the bilinear horizontal blend may use `smlad`/DSP intrinsics or inline assembly behind a compile-time guard. Defining `SH264E_DISABLE_ARM_DSP` must force the portable C path.
 
+### Cortex-M Optimization Policy
+
+`docs/CORTEX_M_OPTIMIZATION_PLAN.md` is the planning source for Cortex-M4/M7
+optimization work. Cortex-M fast paths must preserve the public API, keep a
+portable C fallback, and avoid persistent SRAM growth unless a specific issue
+explicitly allows and documents the increase. Output is bit-exact by default:
+DSP and portable paths must produce matching checksums unless a separate
+documentation decision changes that policy. QEMU validates firmware build,
+boot, semihosting, and checksum behavior only; real-board DWT cycle capture is
+required for performance claims.
+
 ### Progressive Encoder Integration
 
 Tools may read a full source frame for file-based validation, but the library resize output side is progressive.

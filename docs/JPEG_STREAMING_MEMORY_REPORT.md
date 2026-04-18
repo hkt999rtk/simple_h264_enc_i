@@ -52,6 +52,10 @@ to get the path-specific requirement before allocating the slice work buffer:
 | I420 | 0 | Encoder slice planes point directly into the retained MCU-row cache; `work_buffer` may be `NULL` with zero capacity |
 | NV12 | 20,480 | Luma points into the cache; chroma is interleaved into an 8-row UV staging window |
 
+`docs/CORTEX_M_OPTIMIZATION_PLAN.md` tracks a follow-up target to reduce the
+`2560x1440` JPEG 4:2:0 1:1 NV12 effective slice work toward zero without
+changing public JPEG APIs or regressing to full component-frame decode.
+
 ## Output Buffer Boundary
 
 The measurements above separate JPEG decoder/scaler memory from compressed JPEG

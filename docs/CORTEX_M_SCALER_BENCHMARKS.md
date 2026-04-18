@@ -17,11 +17,16 @@ Portable and DSP builds must produce the same checksum for the same target
 fixture. Treat a checksum mismatch as a correctness failure before comparing
 cycles.
 
+Future H.264 encoder benchmark firmware must use the same QEMU preflight and
+real-board DWT capture policy. Encoder benchmarks should export checksum and
+cycle globals for the independent-MB progressive encode path, and should compare
+portable C and DSP-capable builds only after checksum parity is established.
+
 ## QEMU Preflight
 
 Use QEMU to verify that firmware builds, boots, exits through semihosting, and
 keeps checksum behavior stable. Do not use QEMU cycle counts as tuning-quality
-performance data.
+performance data for scaler or encoder optimizations.
 
 ```sh
 cmake -S . -B build-qemu -DSH264E_BUILD_QEMU_TESTS=ON
