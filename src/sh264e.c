@@ -1700,6 +1700,31 @@ static sh264e_status_t chunk_writer_put_byte(sh264e_chunk_writer_t *writer, uint
     return SH264E_OK;
 }
 
+static sh264e_status_t chunk_writer_put_bytes(sh264e_chunk_writer_t *writer,
+                                              const uint8_t *data,
+                                              size_t size)
+{
+    while (size != 0u) {
+        size_t available = writer->capacity - writer->size;
+        size_t take;
+
+        if (available == 0u) {
+            sh264e_status_t status = chunk_writer_flush(writer);
+            if (status != SH264E_OK) {
+                return status;
+            }
+            available = writer->capacity;
+        }
+
+        take = size < available ? size : available;
+        memcpy(writer->buffer + writer->size, data, take);
+        writer->size += take;
+        data += take;
+        size -= take;
+    }
+    return SH264E_OK;
+}
+
 static sh264e_status_t stream_annexb_nalu(uint8_t *chunk_buffer,
                                           size_t chunk_capacity,
                                           size_t *out_size,
@@ -1738,17 +1763,41 @@ static sh264e_status_t stream_annexb_nalu(uint8_t *chunk_buffer,
     SH264E_TRY_PUT_BYTE(0x01u);
     SH264E_TRY_PUT_BYTE(nal_header);
 
-    for (i = 0; i < rbsp_size; i++) {
-        const uint8_t b = rbsp[i];
-        if (zero_count >= 2u && b <= 0x03u) {
+    i = 0u;
+    while (i < rbsp_size) {
+        const size_t run_start = i;
+
+        while (i < rbsp_size) {
+            const uint8_t b = rbsp[i];
+
+            if (zero_count >= 2u && b <= 0x03u) {
+                break;
+            }
+            if (b == 0x00u) {
+                zero_count++;
+            } else {
+                zero_count = 0;
+            }
+            i++;
+        }
+
+        if (i != run_start) {
+            status = chunk_writer_put_bytes(&writer, rbsp + run_start, i - run_start);
+            if (status != SH264E_OK) {
+                return status;
+            }
+        }
+
+        if (i < rbsp_size) {
+            const uint8_t b = rbsp[i++];
             SH264E_TRY_PUT_BYTE(0x03u);
             zero_count = 0;
-        }
-        SH264E_TRY_PUT_BYTE(b);
-        if (b == 0x00u) {
-            zero_count++;
-        } else {
-            zero_count = 0;
+            SH264E_TRY_PUT_BYTE(b);
+            if (b == 0x00u) {
+                zero_count++;
+            } else {
+                zero_count = 0;
+            }
         }
     }
 
