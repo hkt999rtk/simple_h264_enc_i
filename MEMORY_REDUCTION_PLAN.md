@@ -135,6 +135,16 @@ Acceptance criteria:
 * `2560x1440` 4:2:0 uses row-cache scaling instead of full component planes.
 * The measured cache target for `2560x1440` 4:2:0 is documented.
 
+Implemented bridge contract:
+
+* The hidden streaming bridge sizes row-cache storage from decoded component
+  geometry and the scaler's per-slice source row window.
+* The integration matrix asserts exact row-cache bytes for color JPEG inputs:
+  61,440 bytes for 1280x720 4:2:0, 81,920 bytes for 1280x720 4:2:2,
+  122,880 bytes for 1280x720 4:4:4, and 184,320 bytes for 2560x1440 4:2:0.
+* The JPEG tool and integration matrix also assert the scaled output slice work
+  buffer remains 61,440 bytes.
+
 ### 3. Production API Switch
 
 Make the arena-backed JPEG encoder use the streaming path by default.

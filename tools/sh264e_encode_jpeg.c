@@ -291,6 +291,7 @@ int main(int argc, char **argv)
             goto done;
         }
         printf("jpeg work arena bytes: %zu\n", jpeg_work_size);
+        printf("jpeg slice work bytes: %zu\n", work_size);
         printf("jpeg current allocation bytes: %zu\n", stats.current_bytes);
         printf("jpeg peak allocation bytes: %zu\n", stats.peak_bytes);
         if (streaming_prototype) {
