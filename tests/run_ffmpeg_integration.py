@@ -35,6 +35,12 @@ PRODUCTION_MEMORY_1440P_420 = {
 }
 H264_OUTPUT_CONSUMER_CHUNKS = 1 + 90
 H264_OUTPUT_CHUNK_BYTES = 126_976
+H264_ONE_SHOT_OUTPUT_BYTES = 11_428_864
+EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420 = (
+    PRODUCTION_MEMORY_1440P_420["work"]
+    + JPEG_SLICE_WORK_BYTES
+    + H264_OUTPUT_CHUNK_BYTES
+)
 
 
 def run(cmd):
@@ -332,6 +338,15 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
             f"JPEG encoder default path used full component-plane memory: got peak {peak}, limit {max_peak_bytes}"
         )
     if not one_shot_output:
+        output_buffer = parse_jpeg_metric(result.stdout, "jpeg output buffer bytes:")
+        if output_buffer != H264_OUTPUT_CHUNK_BYTES:
+            raise RuntimeError(
+                f"JPEG default output buffer changed: got {output_buffer}, expected {H264_OUTPUT_CHUNK_BYTES}"
+            )
+        if output_buffer >= H264_ONE_SHOT_OUTPUT_BYTES:
+            raise RuntimeError(
+                f"JPEG default path regressed to one-shot output buffering: got {output_buffer}"
+            )
         chunks = parse_jpeg_metric(result.stdout, "jpeg output consumer chunks:")
         if chunks != H264_OUTPUT_CONSUMER_CHUNKS:
             raise RuntimeError(
@@ -341,6 +356,12 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
         if chunk_bytes != H264_OUTPUT_CHUNK_BYTES:
             raise RuntimeError(
                 f"JPEG output consumer chunk capacity changed: got {chunk_bytes}, expected {H264_OUTPUT_CHUNK_BYTES}"
+            )
+    else:
+        output_buffer = parse_jpeg_metric(result.stdout, "jpeg output buffer bytes:")
+        if output_buffer != H264_ONE_SHOT_OUTPUT_BYTES:
+            raise RuntimeError(
+                f"JPEG one-shot output capacity changed: got {output_buffer}, expected {H264_ONE_SHOT_OUTPUT_BYTES}"
             )
 
 
@@ -393,6 +414,10 @@ def encode_jpeg_output_consumer(args, fmt, jpeg_input, bitstream):
     if chunk_bytes != H264_OUTPUT_CHUNK_BYTES:
         raise RuntimeError(
             f"JPEG output consumer chunk capacity changed: got {chunk_bytes}, expected {H264_OUTPUT_CHUNK_BYTES}"
+        )
+    if chunk_bytes >= H264_ONE_SHOT_OUTPUT_BYTES:
+        raise RuntimeError(
+            f"JPEG output consumer regressed to one-shot output buffering: got {chunk_bytes}"
         )
     if "jpeg current allocation bytes: 0" not in result.stdout:
         raise RuntimeError(f"JPEG output consumer leaked tracked allocations: {result.stdout!r}")
@@ -563,6 +588,11 @@ def main():
                 max_peak_bytes=FULL_COMPONENT_BYTES_1440P_420,
                 expected_work_bytes=PRODUCTION_MEMORY_1440P_420["work"],
                 expected_peak_bytes=PRODUCTION_MEMORY_1440P_420["peak"])
+    if EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420 != 434_320:
+        raise RuntimeError(
+            "2560x1440 JPEG streaming memory subtotal changed: "
+            f"got {EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420}, expected 434320"
+        )
     encode_jpeg_streaming_prototype(args, "i420", large_jpeg_input, large_streaming_output,
                                     STREAMING_CACHE_BYTES_1440P_420)
     validate_bitstream(args.ffprobe, args.ffmpeg, large_streaming_output)

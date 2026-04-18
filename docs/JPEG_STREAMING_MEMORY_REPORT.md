@@ -1,12 +1,12 @@
 # JPEG Streaming Memory Report
 
-Issue #21 records the production memory regression target after the
-arena-backed JPEG encoder switched to the MCU-row streaming path.
+Issue #36 records the production output-buffer memory regression target after
+the JPEG tool moved to the public streaming H.264 output consumer API.
 
 The baseline component-plane values are the decoded image component allocations
 from the earlier allocation report. The production measurements below are from
 `sh264e_encode_jpeg`, which calls `sh264e_jpeg_get_work_size` and
-`sh264e_encode_jpeg_idr_with_arena` on the default arena path.
+`sh264e_encode_jpeg_idr_with_arena_stream` on the default arena path.
 
 ## Measured 4:2:0 Production Path
 
@@ -36,8 +36,8 @@ decode. Custom DHT baseline JPEGs remain supported.
 
 ## Output Buffer Boundary
 
-The measurements above exclude H.264 output buffering. The current one-shot
-JPEG API and `sh264e_encode_jpeg` tool still allocate the maximum complete-frame
+The measurements above separate JPEG decoder/scaler memory from H.264 output
+buffering. The one-shot JPEG API still requires the maximum complete-frame
 H.264 output capacity:
 
 ```text
@@ -51,20 +51,36 @@ This is a caller-owned output capacity, not JPEG decoder working memory. It is
 much larger than typical encoded output; the measured `2560x1440` JPEG 4:2:0
 fixture currently emits about 123 KiB of H.264 data.
 
-The next embedded-memory target is a streaming H.264 output consumer API for
-the JPEG path. The library can already produce SPS/PPS and one IDR slice at a
-time internally; the missing piece is an API that calls a caller-provided
-consumer after each complete Annex B chunk. With that API, embedded callers only
-need a reusable output chunk buffer sized for `max(header, one slice)`, currently
-126,976 bytes, instead of the 11,428,864-byte one-shot maximum output buffer.
+The production JPEG tool path now uses the streaming H.264 output consumer API
+and reuses one caller-owned output chunk buffer sized for `max(header, one
+slice)`, currently 126,976 bytes, instead of the 11,428,864-byte one-shot
+maximum output buffer. The tool writes each complete Annex B SPS/PPS or IDR
+slice chunk through a file consumer outside the library.
+
+For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
+`.rodata`, the current budget is:
+
+| Block | Bytes |
+| --- | ---: |
+| JPEG work arena | 245,904 |
+| JPEG/scaler slice work | 61,440 |
+| Reusable H.264 output chunk buffer | 126,976 |
+| Encoder heap | about 191,024 |
+| Static mutable RAM | about 4,529 |
+| Rounded planning budget | about 630 KiB |
+
+The arithmetic subtotal of the rows above is about 629,873 bytes, or about
+615 KiB in binary units. The rounded planning budget remains the existing
+about-630 KiB target for this embedded path.
 
 ## Regression Coverage
 
 `tests/run_ffmpeg_integration.py` asserts the exact production arena work,
-peak-allocation, and row-cache values for the representative `1280x720` and
-`2560x1440` 4:2:0 JPEG fixtures. It also keeps broader color-subsampling
-coverage that fails if the production arena path regresses to full
-component-plane allocation.
+peak-allocation, row-cache, reusable output chunk, and one-shot output capacity
+values for representative JPEG fixtures. It also keeps broader
+color-subsampling coverage that fails if the production arena path regresses to
+full component-plane allocation or if the default JPEG tool path regresses to
+allocating `sh264e_get_max_output_size()` for H.264 output.
 
 The expected validation command is:
 
@@ -95,12 +111,35 @@ Expected metric lines:
 
 ```text
 1280x720:
+jpeg output consumer chunks: 91
+jpeg output chunk buffer bytes: 126976
 jpeg work arena bytes: 92304
+jpeg slice work bytes: 61440
 jpeg peak allocation bytes: 92160
 jpeg streaming cache bytes: 61440
+jpeg output buffer bytes: 126976
 
 2560x1440:
+jpeg output consumer chunks: 91
+jpeg output chunk buffer bytes: 126976
 jpeg work arena bytes: 245904
+jpeg slice work bytes: 61440
 jpeg peak allocation bytes: 245760
 jpeg streaming cache bytes: 184320
+jpeg output buffer bytes: 126976
+```
+
+The hidden one-shot comparison path remains available for regression tests and
+reports the old full-frame output capacity:
+
+```sh
+build/sh264e_encode_jpeg --test-one-shot-output --format i420 \
+  build/integration/input_1440p_yuvj420p.jpg \
+  build/issue36_one_shot_1440_i420.h264
+```
+
+Expected one-shot output metric:
+
+```text
+jpeg output buffer bytes: 11428864
 ```

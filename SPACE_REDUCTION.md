@@ -331,8 +331,8 @@ Issue #31 reduced the `2560x1440` 4:2:0 production peak below the 270 KiB target
 without increasing the 184,320-byte row cache or regressing to full
 component-plane decode.
 
-The next remaining embedded RAM risk is not JPEG decode memory; it is the
-one-shot H.264 output buffer required by the current JPEG API/tool. The current
+The next reduced embedded RAM risk after JPEG decode memory was the one-shot
+H.264 output buffer required by the JPEG API/tool. The one-shot
 maximum complete-frame output capacity is:
 
 ```text
@@ -341,11 +341,11 @@ maximum complete-frame output capacity is:
 
 This output buffer is caller-owned and excluded from the JPEG arena metrics, but
 it dominates an embedded memory budget if the one-shot JPEG API is used. The
-planned reduction is a streaming H.264 output consumer API: the library emits
-SPS/PPS and each IDR slice into a reusable chunk buffer and calls a
-caller-provided consumer. Tools/tests can implement a file-writing consumer;
-embedded callers can forward chunks to storage, flash, DMA, or a ring buffer.
-The target reusable output chunk buffer is currently 126,976 bytes.
+production tool path now uses the streaming H.264 output consumer API: the
+library emits SPS/PPS and each IDR slice into a reusable chunk buffer and calls
+a caller-provided consumer. Tools/tests implement file or memory consumers
+outside the library; embedded callers can forward chunks to storage, flash, DMA,
+or a ring buffer. The reusable output chunk buffer is currently 126,976 bytes.
 
 ### Current Production Boundary
 
