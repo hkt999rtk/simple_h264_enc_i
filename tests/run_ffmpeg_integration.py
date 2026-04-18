@@ -136,6 +136,7 @@ def validate_bitstream(ffprobe, ffmpeg, bitstream):
         raise RuntimeError(f"ffprobe output missing {sorted(missing)}; got {sorted(got)}")
 
     run([ffmpeg, "-v", "error", "-i", str(bitstream), "-f", "null", "-"])
+    run([ffmpeg, "-v", "error", "-xerror", "-i", str(bitstream), "-f", "null", "-"])
 
 
 def validate_image_pix_fmt(ffprobe, image, expected_pix_fmt):
@@ -176,6 +177,7 @@ def decode_i420_frame(args, bitstream, raw_output):
         "-y",
         "-v",
         "error",
+        "-xerror",
         "-i",
         str(bitstream),
         "-f",

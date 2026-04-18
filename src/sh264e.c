@@ -1709,13 +1709,78 @@ static int encode_chroma8x8_dc(sh264e_encoder_t *encoder,
     return level;
 }
 
-static void write_coeff_token_one_or_zero(sh264e_bit_writer_t *bw, int has_coeff)
+static unsigned cavlc_coeff_token_table_for_nc(unsigned nC)
 {
-    if (has_coeff == 0) {
-        bw_write_bit(bw, 1);             /* TotalCoeff=0 for nC 0..1 */
-    } else {
-        bw_write_bits(bw, 0x05u, 6);     /* TotalCoeff=1, TrailingOnes=0 for nC 0..1 */
+    if (nC < 2u) {
+        return 0u;
     }
+    if (nC < 4u) {
+        return 1u;
+    }
+    if (nC < 8u) {
+        return 2u;
+    }
+    return 3u;
+}
+
+static unsigned predict_luma_nc(const sh264e_encoder_t *encoder, unsigned block_x, unsigned block_y)
+{
+    unsigned nC = 0u;
+    unsigned neighbors = 0u;
+
+    if (block_x > 0u) {
+        nC += encoder->nz_luma[(size_t)block_y * SH264E_LUMA4_X + block_x - 1u];
+        neighbors++;
+    }
+    if (block_y > 0u) {
+        nC += encoder->nz_luma[((size_t)block_y - 1u) * SH264E_LUMA4_X + block_x];
+        neighbors++;
+    }
+    if (neighbors == 2u) {
+        return (nC + 1u) >> 1u;
+    }
+    return nC;
+}
+
+static void write_coeff_token_one_or_zero(sh264e_bit_writer_t *bw, int has_coeff, unsigned nC)
+{
+    static const uint8_t len[4][2] = {
+        {1, 6},
+        {2, 6},
+        {4, 6},
+        {6, 6}
+    };
+    static const uint8_t bits[4][2] = {
+        {1, 5},
+        {3, 11},
+        {15, 15},
+        {3, 0}
+    };
+    const unsigned table = cavlc_coeff_token_table_for_nc(nC);
+    const unsigned index = has_coeff != 0 ? 1u : 0u;
+
+    bw_write_bits(bw, bits[table][index], len[table][index]);
+}
+
+static int write_cavlc_level(sh264e_bit_writer_t *bw, int level);
+
+static void write_luma_residual_dc_only(sh264e_bit_writer_t *bw, int level, unsigned nC)
+{
+    if (level == 0) {
+        write_coeff_token_one_or_zero(bw, 0, nC);
+        return;
+    }
+    if (level == 1) {
+        level = 2;
+    } else if (level == -1) {
+        level = -2;
+    }
+    write_coeff_token_one_or_zero(bw, 1, nC);
+    if (!write_cavlc_level(bw, level)) {
+        bw->error = 1;
+        return;
+    }
+    bw_write_bit(bw, 1);                 /* total_zeros = 0 for TotalCoeff=1 */
 }
 
 static uint32_t cavlc_parsed_level_code(unsigned prefix, unsigned suffix_length, uint32_t suffix)
@@ -1769,29 +1834,10 @@ static int write_cavlc_level(sh264e_bit_writer_t *bw, int level)
     return 0;
 }
 
-static void write_residual_dc_only(sh264e_bit_writer_t *bw, int level)
-{
-    if (level == 0) {
-        write_coeff_token_one_or_zero(bw, 0);
-        return;
-    }
-    if (level == 1) {
-        level = 2;
-    } else if (level == -1) {
-        level = -2;
-    }
-    write_coeff_token_one_or_zero(bw, 1);
-    if (!write_cavlc_level(bw, level)) {
-        bw->error = 1;
-        return;
-    }
-    bw_write_bit(bw, 1);                 /* total_zeros = 0 for TotalCoeff=1 */
-}
-
 static void write_chroma_dc_residual(sh264e_bit_writer_t *bw, int level)
 {
     if (level == 0) {
-        bw_write_bits(bw, 0x03u, 6);     /* TotalCoeff=0 for chroma DC */
+        bw_write_bits(bw, 0x01u, 2);     /* TotalCoeff=0 for chroma DC */
         return;
     }
     bw_write_bit(bw, 1);                 /* TotalCoeff=1, TrailingOnes=1 for chroma DC */
@@ -1869,7 +1915,10 @@ static sh264e_status_t make_idr_slice(sh264e_encoder_t *encoder,
             bw_write_se(&bw, 0);                     /* mb_qp_delta */
             for (b = 0; b < 16u; b++) {
                 if ((cbp_luma & (1u << (b / 4u))) != 0u) {
-                    write_residual_dc_only(&bw, levels[b]);
+                    const unsigned x = mb_x * 16u + k_luma4x4_x[b];
+                    const unsigned y = k_luma4x4_y[b];
+                    write_luma_residual_dc_only(&bw, levels[b],
+                                                predict_luma_nc(encoder, x / 4u, y / 4u));
                 }
             }
             if (cbp_chroma != 0u) {
