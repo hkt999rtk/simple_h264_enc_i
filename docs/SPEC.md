@@ -303,7 +303,11 @@ Exact `2x` and `0.5x` source-to-target ratios may use specialized coordinate
 paths that avoid the general mapper. These paths must remain byte-exact with
 the half-pixel bilinear formula above for both I420 and NV12 output.
 
-When compiled for ARM cores with the DSP extension, the bilinear horizontal blend may use `smlad`/DSP intrinsics or inline assembly behind a compile-time guard. Defining `SH264E_DISABLE_ARM_DSP` must force the portable C path.
+When compiled for ARM cores with the DSP extension, the bilinear horizontal
+blend may use `smlad`/DSP intrinsics or inline assembly behind a compile-time
+guard. Exact `2x` and `0.5x` paths may also use quarter-step `smlad` vertical
+pair sums because those ratios only produce 0, 1/4, 1/2, and 3/4 blend
+fractions. Defining `SH264E_DISABLE_ARM_DSP` must force the portable C path.
 
 ### Cortex-M Optimization Policy
 

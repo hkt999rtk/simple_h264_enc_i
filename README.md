@@ -144,7 +144,9 @@ The library scaler uses fixed-point bilinear interpolation. When the source is a
 The common `1280x720 -> 2560x1440` and `5120x2880 -> 2560x1440`
 ratios use exact fixed-ratio fast paths that preserve the same half-pixel
 bilinear output as the general mapper for I420 and NV12.
-On ARM builds with DSP extension support, the scaler uses an `smlad` guarded path unless `SH264E_DISABLE_ARM_DSP` is defined.
+On ARM builds with DSP extension support, the scaler uses guarded `smlad`
+paths for horizontal pair sums and exact fixed-ratio quarter-step vertical
+blends unless `SH264E_DISABLE_ARM_DSP` is defined.
 
 Encode a baseline JPEG memory-input path through the library wrapper:
 
