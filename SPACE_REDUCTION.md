@@ -265,13 +265,11 @@ JPEG bitstream
 -> H.264 slice encode
 ```
 
-This is a larger decoder refactor and should not replace the component-plane
-path until the hidden prototype has passed the public JPEG matrix. The current
-prototype decodes one MCU row at a time into component row rings, feeds the
-existing progressive H.264 slice encoder when enough source rows are available
-for the next output slice, and uses the same caller-provided JPEG arena policy
-as the component-plane path for both NanoJPEG's one-MCU-row buffers and the
-retained row cache.
+The row-cache bridge decodes one MCU row at a time into component row rings,
+feeds the existing progressive H.264 slice encoder when enough source rows are
+available for the next output slice, and uses the same caller-provided JPEG
+arena policy as the component-plane path for both NanoJPEG's one-MCU-row
+buffers and the retained row cache.
 
 ### Expected Benefit
 
@@ -301,9 +299,11 @@ encoder slice work buffer, and the H.264 output buffer. The streaming cache
 adds one MCU-row margin beyond the maximum fixed-point source window so slices
 at row-window boundaries can still sample the previous row.
 
-### Current Prototype Boundary
+### Current Production Boundary
 
-* Keep the public API unchanged until the internal row-window contract is proven.
+* Keep the public API unchanged; `sh264e_jpeg_get_work_size` and
+  `sh264e_encode_jpeg_idr_with_arena` now use the streaming row-cache path for
+  deterministic arena-backed JPEG encode.
 * Support baseline sequential grayscale or three-component YCbCr JPEGs within
   the public JPEG source-size policy.
 * Reject progressive/lossless JPEG, arithmetic coding, CMYK/other color spaces,
@@ -313,9 +313,10 @@ at row-window boundaries can still sample the previous row.
 * Validate 1280x720 4:2:0, 4:2:2, and 4:4:4 fixtures, 2560x1440 4:2:0,
   grayscale, I420 and NV12 output, and a `cjpeg`-generated DRI/RST
   restart-marker fixture when `cjpeg` is available.
-* Keep the row-window bridge hidden and opt-in for now. The production/default
-  JPEG path remains the component-plane arena path until the streaming path is
-  exposed through a public policy rather than a tool-only flag.
+* Keep the heap-backed convenience wrapper compatible for callers that do not
+  need deterministic JPEG arena placement.
+* Keep the tool-local `--streaming-prototype` path as an internal comparison
+  mode while the default arena path exercises the same row-cache bridge.
 
 ### Risks
 
