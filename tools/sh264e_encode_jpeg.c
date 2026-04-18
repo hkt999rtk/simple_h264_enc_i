@@ -291,9 +291,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "sh264e_encoder_get_work_size failed: %s\n", sh264e_status_string(status));
         goto done;
     }
-    status = sh264e_jpeg_get_slice_buffer_size(&work_size);
+    status = sh264e_jpeg_get_slice_work_size(jpeg_data, jpeg_size, pixfmt, &work_size);
     if (status != SH264E_OK) {
-        fprintf(stderr, "sh264e_jpeg_get_slice_buffer_size failed: %s\n", sh264e_status_string(status));
+        fprintf(stderr, "sh264e_jpeg_get_slice_work_size failed: %s\n", sh264e_status_string(status));
         goto done;
     }
     if (allocation_limit != (size_t)-1 || streaming_prototype ||
@@ -325,14 +325,16 @@ int main(int argc, char **argv)
         }
         jpeg_arena = jpeg_arena_alloc + arena_offset;
     }
-    work = (uint8_t *)malloc(work_size);
+    if (work_size != 0u) {
+        work = (uint8_t *)malloc(work_size);
+    }
     if (output_capacity != 0u) {
         output_buf = (uint8_t *)malloc(output_capacity);
     }
     if (output_chunk_capacity != 0u) {
         output_chunk_buf = (uint8_t *)malloc(output_chunk_capacity);
     }
-    if (work == NULL ||
+    if ((work_size != 0u && work == NULL) ||
         (output_capacity != 0u && output_buf == NULL) ||
         (output_chunk_capacity != 0u && output_chunk_buf == NULL)) {
         fprintf(stderr, "failed to allocate work/output buffers\n");

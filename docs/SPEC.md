@@ -94,6 +94,7 @@ Required API entry points:
 * `sh264e_resize_get_slice_buffer_size`
 * `sh264e_resize_make_slice`
 * `sh264e_jpeg_get_slice_buffer_size`
+* `sh264e_jpeg_get_slice_work_size`
 * `sh264e_encode_jpeg_idr`
 * `sh264e_encode_jpeg_idr_with_arena_stream`
 
@@ -326,6 +327,7 @@ H.264 IDR slice encode
 
 ```
 sh264e_jpeg_get_slice_buffer_size
+sh264e_jpeg_get_slice_work_size
 sh264e_encode_jpeg_idr
 sh264e_encode_jpeg_idr_with_arena
 sh264e_encode_jpeg_idr_with_arena_stream
@@ -370,6 +372,11 @@ may implement a consumer that writes to a file.
 JPEG allocations from the last JPEG work-size query or encode call.
 `sh264e_jpeg_get_last_streaming_cache_bytes` reports the decoded row-cache
 capacity retained by the last MCU-row streaming query or encode call.
+`sh264e_jpeg_get_slice_work_size` reports the path-specific caller work-buffer
+capacity for a specific JPEG input and output pixel format. This lets embedded
+callers use zero slice-work bytes for the `2560x1440` 4:2:0 1:1 I420 path and
+20,480 bytes for the equivalent NV12 path, while
+`sh264e_jpeg_get_slice_buffer_size` remains a conservative worst-case query.
 `sh264e_jpeg_get_last_slice_work_bytes` reports the effective slice staging used
 by the last JPEG encode. These are diagnostic/stat APIs for regression reporting; allocation-limit and
 streaming-prototype hooks remain private test hooks gated by

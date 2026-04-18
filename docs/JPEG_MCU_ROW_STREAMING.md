@@ -92,8 +92,9 @@ and the decoded component's native height.
 
 Decoded MCU rows are copied into the rolling cache. As soon as the source row
 window for the next output slice is available, the integration layer scales one
-YUV420 slice into the caller-provided 61,440-byte slice work buffer and calls
-`sh264e_encode_idr_slice`.
+YUV420 slice into caller-provided slice work memory and calls
+`sh264e_encode_idr_slice`. The general scaler path still requires the
+61,440-byte complete output slice.
 
 For `2560x1440` 4:2:0 source JPEGs encoded to the fixed `2560x1440` target,
 the pipeline uses a 1:1 fast path. It keeps exactly one MCU row per component,
@@ -120,15 +121,17 @@ image height:
 | 1280x720 4:2:0 | 61,440 | 61,440 |
 | 1280x720 4:2:2 | 81,920 | 61,440 |
 | 1280x720 4:4:4 | 122,880 | 61,440 |
-| 2560x1440 4:2:0, 1:1 fast path | 61,440 | 61,440 API capacity; effective I420 0, NV12 20,480 |
+| 2560x1440 4:2:0, 1:1 fast path, I420 | 61,440 | 0 |
+| 2560x1440 4:2:0, 1:1 fast path, NV12 | 61,440 | 20,480 |
 
 For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
-`.rodata`, the current planning budget is about 390 KiB:
+`.rodata`, the current planning budget is about 330 KiB for I420 or about
+350 KiB for NV12:
 
 | Block | Bytes |
 | --- | ---: |
 | JPEG work arena | 123,024 |
-| JPEG/scaler slice work | 61,440 |
+| JPEG/scaler slice work | 0 for I420, 20,480 for NV12 |
 | Reusable H.264 output chunk buffer | 4,096 |
 | Encoder arena | 191,055 |
 | Static mutable RAM | about 4,529 |

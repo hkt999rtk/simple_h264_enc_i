@@ -300,10 +300,12 @@ Approximate component-cache targets from the design note:
 | 5120x2880 4:2:0 | not yet measured | 491,520 |
 | 5120x2880 4:4:4 | not yet measured | 819,200 |
 
-These estimates exclude caller-owned JPEG input, the existing 61,440-byte
-encoder slice work buffer, and the H.264 output buffer. The streaming cache
-adds one MCU-row margin beyond the maximum fixed-point source window so slices
-at row-window boundaries can still sample the previous row.
+These estimates exclude caller-owned JPEG input, JPEG/scaler slice work, and the
+H.264 output buffer. The general scaler path still uses a 61,440-byte slice
+work buffer; the `2560x1440` 4:2:0 1:1 fast path needs 0 bytes for I420 or
+20,480 bytes for NV12. The streaming cache adds one MCU-row margin beyond the
+maximum fixed-point source window so slices at row-window boundaries can still
+sample the previous row.
 
 The production memory regression report is tracked in
 `docs/JPEG_STREAMING_MEMORY_REPORT.md`. The measured 4:2:0 arena-backed default
