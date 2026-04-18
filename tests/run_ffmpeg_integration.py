@@ -298,6 +298,7 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
         command.extend(extra_args)
     command.extend(["--format", fmt, str(jpeg_input), str(bitstream)])
     result = run_capture(command)
+    one_shot_output = extra_args is not None and "--test-one-shot-output" in extra_args
     if "jpeg current allocation bytes: 0" not in result.stdout:
         raise RuntimeError(f"JPEG encoder did not release tracked allocations: {result.stdout!r}")
     if "jpeg work arena bytes:" not in result.stdout:
@@ -330,6 +331,17 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
         raise RuntimeError(
             f"JPEG encoder default path used full component-plane memory: got peak {peak}, limit {max_peak_bytes}"
         )
+    if not one_shot_output:
+        chunks = parse_jpeg_metric(result.stdout, "jpeg output consumer chunks:")
+        if chunks != H264_OUTPUT_CONSUMER_CHUNKS:
+            raise RuntimeError(
+                f"JPEG output consumer chunk count changed: got {chunks}, expected {H264_OUTPUT_CONSUMER_CHUNKS}"
+            )
+        chunk_bytes = parse_jpeg_metric(result.stdout, "jpeg output chunk buffer bytes:")
+        if chunk_bytes != H264_OUTPUT_CHUNK_BYTES:
+            raise RuntimeError(
+                f"JPEG output consumer chunk capacity changed: got {chunk_bytes}, expected {H264_OUTPUT_CHUNK_BYTES}"
+            )
 
 
 def encode_jpeg_streaming_prototype(args, fmt, jpeg_input, bitstream, expected_cache_bytes=None):
@@ -511,11 +523,21 @@ def main():
                         expected_work_bytes=expected_work,
                         expected_peak_bytes=expected_peak)
             if pix_fmt == "yuvj420p" and fmt == "i420":
+                one_shot_output = workdir / "output_jpeg_one_shot_yuvj420p_i420.h264"
+                encode_jpeg(args, fmt, jpeg_input, one_shot_output,
+                            ["--test-one-shot-output"],
+                            STREAMING_CACHE_BYTES_720P[pix_fmt],
+                            FULL_COMPONENT_BYTES_720P[pix_fmt],
+                            PRODUCTION_MEMORY_720P_420["work"],
+                            PRODUCTION_MEMORY_720P_420["peak"])
+                validate_bitstream(args.ffprobe, args.ffmpeg, one_shot_output)
+                if jpeg_output.read_bytes() != one_shot_output.read_bytes():
+                    raise RuntimeError("JPEG default output consumer bitstream differs from one-shot output")
                 consumer_output = workdir / "output_jpeg_consumer_yuvj420p_i420.h264"
                 encode_jpeg_output_consumer(args, fmt, jpeg_input, consumer_output)
                 validate_bitstream(args.ffprobe, args.ffmpeg, consumer_output)
-                if consumer_output.read_bytes() != jpeg_output.read_bytes():
-                    raise RuntimeError("JPEG output consumer bitstream differs from one-shot output")
+                if consumer_output.read_bytes() != one_shot_output.read_bytes():
+                    raise RuntimeError("JPEG memory consumer bitstream differs from one-shot output")
                 run_expect_fail([
                     args.jpeg_encoder,
                     "--test-output-consumer-fail-after",
