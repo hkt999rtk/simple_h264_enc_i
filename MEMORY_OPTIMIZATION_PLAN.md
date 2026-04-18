@@ -18,11 +18,11 @@ Current `2560x1440` 4:2:0 embedded budget, excluding compressed JPEG input and
 | Block | Bytes | Notes |
 | --- | ---: | --- |
 | JPEG work arena | 123,024 | 1:1 4:2:0 path: one MCU-row cache plus NanoJPEG MCU-row temp buffers |
-| JPEG/scaler slice work | 61,440 | API capacity; 1:1 effective use is I420 0 bytes, NV12 20,480 bytes |
+| JPEG/scaler slice work | 0 I420 / 20,480 NV12 | Path-specific query for 1:1 4:2:0; conservative unknown-JPEG capacity remains 61,440 |
 | Reusable H.264 output chunk buffer | 4,096 | Byte-stream flush buffer |
 | Encoder heap | 191,048 | See `docs/ENCODER_MEMORY_REPORT.md` |
 | Static mutable RAM | about 4,529 | Excludes `.rodata` |
-| Total | about 390 KiB class | Excludes compressed JPEG input |
+| Total | about 330 KiB I420 / 350 KiB NV12 | Excludes compressed JPEG input |
 
 The old full decoded JPEG component-frame allocation was 5,529,600 bytes for
 `2560x1440` 4:2:0 and is no longer allowed for public JPEG APIs.
@@ -84,8 +84,9 @@ slices from the smallest valid row-cache/staging window.
 
 The implemented 1:1 path keeps one MCU row per component. I420 output feeds the
 encoder directly from the row cache, while NV12 still stages only the 20,480-byte
-interleaved chroma window. The public slice-work capacity remains 61,440 bytes
-until issue #53 narrows the caller-facing work-buffer contract.
+interleaved chroma window. Issue #53 added a path-specific slice-work query so
+callers with the JPEG bytes can allocate 0 bytes for I420 or 20,480 bytes for
+NV12; the conservative unknown-JPEG query remains 61,440 bytes.
 
 Acceptance focus:
 
@@ -178,13 +179,14 @@ Depends on or should follow #49.
 
 Target the current fixed slice work buffer:
 
-| Current | Target direction |
+| Previous | Implemented target |
 | ---: | --- |
-| 61,440 bytes | path-dependent reduction or documented reason it cannot shrink |
+| 61,440 bytes | 0 bytes for 1:1 I420, 20,480 bytes for 1:1 NV12 |
 
-The easiest first case is likely 1:1 I420 after #49. NV12 may still need chroma
-interleave staging. General scaled sources may require deeper encoder/scaler
-input refactoring.
+The 1:1 I420 case now accepts a `NULL`/zero-capacity caller slice work buffer
+after the JPEG parser confirms the compatible geometry. NV12 still needs only
+the 20,480-byte chroma interleave staging window. General scaled sources still
+need the conservative 61,440-byte scaler output slice.
 
 Acceptance focus:
 
