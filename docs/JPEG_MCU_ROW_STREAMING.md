@@ -122,16 +122,16 @@ image height:
 | 1280x720 4:2:2 | 81,920 | 61,440 |
 | 1280x720 4:4:4 | 122,880 | 61,440 |
 | 2560x1440 4:2:0, 1:1 fast path, I420 | 61,440 | 0 |
-| 2560x1440 4:2:0, 1:1 fast path, NV12 | 61,440 | 20,480 |
+| 2560x1440 4:2:0, 1:1 fast path, NV12 | 61,440 | 0 |
 
 For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
 `.rodata`, the current planning budget is about 130 KiB for I420 or about
-150 KiB for NV12:
+130 KiB for NV12:
 
 | Block | Bytes |
 | --- | ---: |
 | JPEG work arena | 123,024 |
-| JPEG/scaler slice work | 0 for I420, 20,480 for NV12 |
+| JPEG/scaler slice work | 0 |
 | Reusable H.264 output chunk buffer | 4,096 |
 | Encoder arena | 303 |
 | Static mutable RAM | about 4,529 |

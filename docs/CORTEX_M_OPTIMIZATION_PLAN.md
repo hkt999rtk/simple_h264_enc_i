@@ -36,7 +36,7 @@ follow-up work.
    insertion.
 5. Add exact scaler fast paths for `1280x720 -> 2560x1440` and
    `5120x2880 -> 2560x1440` for I420 and NV12.
-6. Reduce the `2560x1440` JPEG 4:2:0 1:1 NV12 slice-work staging requirement.
+6. Remove the `2560x1440` JPEG 4:2:0 1:1 NV12 slice-work staging requirement.
 7. Evaluate exact DSP vertical blend optimization for the bilinear scaler.
 
 ## Issue Dependency Graph

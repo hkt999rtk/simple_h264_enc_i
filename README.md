@@ -171,7 +171,7 @@ callers that have not parsed their JPEG yet.
 `sh264e_jpeg_get_last_slice_work_bytes` reports the effective slice staging
 used by the last JPEG encode. For `2560x1440` 4:2:0 source JPEGs, the 1:1 fast
 path reduces retained row cache to 61,440 bytes and requires 0 bytes of
-caller slice work for I420 or 20,480 bytes for NV12.
+caller slice work for both I420 and NV12.
 `sh264e_encoder_get_memory_report` reports the fixed-v1 encoder heap breakdown
 without creating an encoder; `docs/ENCODER_MEMORY_REPORT.md` records the current
 296-byte total and sub-block composition.
