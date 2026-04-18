@@ -135,7 +135,7 @@ Progressive slice mode is the preferred v1 library interface. Frame mode (`sh264
 * Bitstream format:
 
   * Annex B (start code: `0x000001`)
-* Target independent-MB output structure:
+* Independent-MB output structure:
 
   ```
   SPS
@@ -190,8 +190,8 @@ IDR Slice[MB 14399]
 
 `sh264e_begin_idr` emits SPS/PPS. `sh264e_end_idr` emits no bitstream in v1; it validates that exactly 90 input rows were submitted and resets the progressive frame state.
 
-The target independent-MB mode keeps the public progressive input call sequence
-but changes H.264 slice granularity:
+Independent-MB mode keeps the public progressive input call sequence but changes
+H.264 slice granularity:
 
 * `sh264e_encode_idr_slice` still consumes one horizontal macroblock input row.
 * Each input-row call emits **160** complete IDR slice NALUs.
@@ -207,7 +207,7 @@ The encoder owns the progressive slice index.
 
 * Caller must submit slices in top-to-bottom raster order
 * Caller does not pass a slice index
-* Target independent-MB mode: `first_mb_in_slice = row_index * 160 + mb_x`
+* Independent-MB mode: `first_mb_in_slice = row_index * 160 + mb_x`
 * A 91st slice call must fail
 * Calling slice encode before `sh264e_begin_idr` must fail
 * Calling `sh264e_end_idr` before all 90 slices are encoded must fail
@@ -531,7 +531,7 @@ NALU Packaging
 
 #### Rules:
 
-* Target mode emits one H.264 slice per macroblock.
+* Independent-MB mode emits one H.264 slice per macroblock.
 * Left and top macroblocks are outside the current H.264 slice, so they are
   unavailable to the decoder.
 * Encoder must not read or write row-level reconstructed-neighbor samples.
@@ -585,7 +585,7 @@ NALU Packaging
 * PPS (nal_unit_type = 8)
 * IDR Slice (nal_unit_type = 5)
 
-Target independent-MB mode emits one IDR slice NALU per macroblock.
+Independent-MB mode emits one IDR slice NALU per macroblock.
 
 #### Constraints:
 

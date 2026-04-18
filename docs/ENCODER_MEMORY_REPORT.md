@@ -29,14 +29,14 @@ workspace now only needs to hold one macroblock slice.
 
 The independent macroblock slice mode eliminates these blocks:
 
-| Block | Current bytes | Target |
+| Block | Former bytes | Current bytes |
 | --- | ---: | ---: |
 | Reconstructed luma slice | 40,960 | 0 |
 | Reconstructed chroma slices | 20,480 | 0 |
 | Neighbor/nonzero state | 2,560 | 0 |
 | Removable subtotal | 64,000 | 0 |
 
-The target bitstream emits one H.264 slice per macroblock so the decoder treats
+The current bitstream emits one H.264 slice per macroblock so the decoder treats
 left/top macroblocks as unavailable. Encoder-side row reconstructed-neighbor
 prediction and row CAVLC neighbor context are therefore removed.
 

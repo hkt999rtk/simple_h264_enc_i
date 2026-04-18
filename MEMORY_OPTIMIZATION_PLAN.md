@@ -33,9 +33,9 @@ storage and `.rodata`:
 The old full decoded JPEG component-frame allocation was 5,529,600 bytes for
 `2560x1440` 4:2:0 and is no longer allowed for public JPEG APIs.
 
-Independent-MB result:
+Independent-MB memory result:
 
-| Block | Current bytes | Independent-MB target |
+| Block | Former bytes | Current bytes |
 | --- | ---: | ---: |
 | Reconstructed luma slice | 40,960 | 0 |
 | Reconstructed chroma slices | 20,480 | 0 |

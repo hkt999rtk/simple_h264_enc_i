@@ -1,9 +1,9 @@
-# Independent Macroblock Slice Mode Plan
+# Independent Macroblock Slice Mode Status
 
-## Goal
+## Implemented Behavior
 
-Change the H.264 encoder direction from row-slice intra prediction to
-independent macroblock slices:
+The H.264 encoder uses independent macroblock slices instead of row-slice
+reconstructed-neighbor intra prediction:
 
 * IDR-only
 * fixed 16x16 macroblocks
@@ -15,14 +15,15 @@ independent macroblock slices:
 This is a deliberate Cortex-M tradeoff. The encoder is intended to be simple,
 deterministic, and low-memory rather than compression efficient.
 
-Issues #63 and #64 implement the bitstream shape and memory removal in this
-plan. The implementation uses fixed unavailable-neighbor residual prediction and
-fixed CAVLC `nC = 0`; it retains no row-level or per-macroblock reconstructed
-neighbor state.
+Issues #63, #64, #65, #66, and #67 implemented and validated this mode. The
+implementation uses fixed unavailable-neighbor residual prediction and fixed
+CAVLC `nC = 0`; it retains no row-level or per-macroblock reconstructed neighbor
+state.
 
-## Current Baseline
+## Former Row-Slice Baseline
 
-The current progressive input API consumes one macroblock row per call:
+The progressive input API consumed one macroblock row per call before this
+change, and that public call shape remains unchanged:
 
 ```text
 sh264e_begin_idr
@@ -30,7 +31,7 @@ sh264e_begin_idr
 sh264e_end_idr
 ```
 
-Current bitstream shape:
+Former bitstream shape:
 
 ```text
 SPS
@@ -38,23 +39,23 @@ PPS
 90 IDR slice NALUs
 ```
 
-Each current IDR slice contains one horizontal macroblock row, or 160
+Each former IDR slice contained one horizontal macroblock row, or 160
 macroblocks. That model uses reconstructed left/top samples inside a slice for
 DC prediction and CAVLC neighbor context.
 
-Current encoder-owned memory includes:
+Former encoder-owned memory included:
 
 | Block | Bytes |
 | --- | ---: |
 | Reconstructed luma slice | 40,960 |
 | Reconstructed chroma slices | 20,480 |
 | Neighbor/nonzero state | 2,560 |
-| Total removable target | 64,000 |
+| Removed subtotal | 64,000 |
 
-## Target Bitstream Shape
+## Current Bitstream Shape
 
-Keep the progressive input API row-oriented, but change the H.264 slice output
-inside each row:
+The progressive input API remains row-oriented, while the H.264 slice output
+inside each row is now macroblock-oriented:
 
 ```text
 SPS
@@ -86,7 +87,7 @@ reconstructed-neighbor prediction is used.
 
 ## API Behavior
 
-Avoid large public API churn for the first implementation:
+The implementation preserves the public progressive API shape:
 
 * `sh264e_begin_idr` still emits SPS/PPS.
 * `sh264e_encode_idr_slice` still consumes one horizontal input macroblock row.
@@ -104,7 +105,7 @@ slice NALU. The clearer terminology is:
 
 ## Prediction and Residual
 
-Target encoder behavior:
+Implemented encoder behavior:
 
 * no luma reconstructed-neighbor prediction
 * no chroma reconstructed-neighbor prediction
@@ -125,38 +126,37 @@ write CAVLC residual with nC = 0
 
 Chroma may continue to use one simplified DC-like residual per 8x8 block.
 
-## Memory Target
+## Memory Result
 
-The first implementation should remove these encoder-owned blocks:
+The implementation removes these encoder-owned blocks:
 
-| Block | Current bytes | Target |
+| Block | Former bytes | Current bytes |
 | --- | ---: | ---: |
 | Reconstructed luma slice | 40,960 | 0 |
 | Reconstructed chroma slices | 20,480 | 0 |
 | Neighbor/nonzero state | 2,560 | 0 |
-| Removable subtotal | 64,000 | 0 |
+| Removed subtotal | 64,000 | 0 |
 
-The encoder will still need:
+The encoder still needs:
 
 * opaque context/config
 * bitstream/RBSP scratch unless the streaming output writer removes or shrinks
   it further
 * any small temporary per-macroblock local variables
 
-If #48 streaming H.264 output is active, this independent-MB mode should also
-help reduce the worst-case bitstream scratch requirement because the encoder no
-longer needs a full macroblock-row slice RBSP.
+Independent-MB mode also reduced the worst-case bitstream scratch requirement
+because the encoder no longer needs a full macroblock-row slice RBSP.
 
-## CPU and SRAM Bandwidth Target
+## CPU and SRAM Bandwidth Result
 
-The implementation should eliminate:
+The implementation eliminates:
 
 * per-slice `memset` of reconstructed luma/chroma buffers
 * per-block reads from reconstructed left/top samples
 * per-block reconstructed pixel writes
 * nonzero-neighbor state updates and reads
 
-Expected result:
+Result:
 
 * lower CPU cycles per macroblock
 * lower SRAM read/write bandwidth
@@ -176,24 +176,24 @@ The cost is intentional:
 This tradeoff is acceptable for the target use case if CPU/SRAM is more
 important than bitstream size.
 
-## Implementation Steps
+## Implemented Steps
 
-1. Update documentation and tests to distinguish input rows from H.264 slices.
-2. Refactor the IDR writer so one helper emits exactly one macroblock as one
+1. Documentation and tests distinguish input rows from H.264 slices.
+2. The IDR writer has one helper that emits exactly one macroblock as one
    IDR slice NALU.
-3. In `sh264e_encode_idr_slice`, loop over 160 macroblocks and emit 160 IDR
+3. `sh264e_encode_idr_slice` loops over 160 macroblocks and emits 160 IDR
    slice NALUs for the submitted input row.
-4. Set `first_mb_in_slice = row_index * 160 + mb_x`.
-5. Replace reconstructed-neighbor prediction with fixed boundary prediction.
-6. Remove reconstructed luma/chroma buffers from encoder state.
-7. Remove neighbor/nonzero state from encoder state.
-8. Fix CAVLC `nC` to 0.
-9. Update max output sizing and streaming output buffer assumptions.
-10. Update memory reports and regression tests.
+4. `first_mb_in_slice = row_index * 160 + mb_x`.
+5. Reconstructed-neighbor prediction is replaced with fixed boundary prediction.
+6. Reconstructed luma/chroma buffers are removed from encoder state.
+7. Neighbor/nonzero state is removed from encoder state.
+8. CAVLC `nC` is fixed to 0.
+9. Max output sizing and streaming output buffer assumptions are updated.
+10. Memory reports and regression tests are updated.
 
 ## Validation
 
-Required validation:
+Validation used for the final status:
 
 ```sh
 cmake -S . -B build

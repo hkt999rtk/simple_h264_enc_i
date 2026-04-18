@@ -17,6 +17,10 @@ This project is intentionally small and narrow in scope:
 * Core memory-input and source-input baseline JPEG decode path via NanoJPEG
 
 The encoder is designed for validation and offline experiments, not compression efficiency.
+The current independent-MB bitstream intentionally trades compression ratio for
+low SRAM use: it emits 14,400 IDR slice NALUs per frame instead of the former 90
+row-slice NALUs, which increases slice-header overhead while eliminating
+encoder-owned reconstructed-neighbor row state.
 
 ## Layout
 
