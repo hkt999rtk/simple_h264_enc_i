@@ -332,5 +332,31 @@ if(SH264E_BUILD_TESTS)
             mps2-an500
             SH264E_DISABLE_ARM_DSP
         )
+        sh264e_add_qemu_firmware(
+            sh264e_qemu_encoder_bench_m4
+            tests/qemu_encoder_bench.c
+            cortex-m4
+            mps2-an386
+        )
+        sh264e_add_qemu_firmware(
+            sh264e_qemu_encoder_bench_m4_portable
+            tests/qemu_encoder_bench.c
+            cortex-m4
+            mps2-an386
+            SH264E_DISABLE_ARM_DSP
+        )
+        sh264e_add_qemu_firmware(
+            sh264e_qemu_encoder_bench_m7
+            tests/qemu_encoder_bench.c
+            cortex-m7
+            mps2-an500
+        )
+        sh264e_add_qemu_firmware(
+            sh264e_qemu_encoder_bench_m7_portable
+            tests/qemu_encoder_bench.c
+            cortex-m7
+            mps2-an500
+            SH264E_DISABLE_ARM_DSP
+        )
     endif()
 endif()
