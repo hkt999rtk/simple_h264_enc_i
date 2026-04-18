@@ -83,7 +83,7 @@ For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
 | JPEG work arena | 123,024 |
 | JPEG/scaler slice work | 61,440 |
 | Reusable H.264 output chunk buffer | 4,096 |
-| Encoder heap | about 191,024 |
+| Encoder heap | 191,048 |
 | Static mutable RAM | about 4,529 |
 | Rounded planning budget | about 390 KiB |
 
@@ -91,11 +91,16 @@ The arithmetic subtotal of the rows above is about 384,113 bytes, or about
 375 KiB in binary units. The rounded planning budget is now about 390 KiB for
 this embedded path.
 
+The encoder heap row is measured by `sh264e_encoder_get_memory_report`; see
+`docs/ENCODER_MEMORY_REPORT.md` for the context, bitstream scratch,
+reconstructed-slice, and neighbor-state breakdown.
+
 ## Regression Coverage
 
 `tests/run_ffmpeg_integration.py` asserts the exact production arena work,
-peak-allocation, row-cache, effective slice work, reusable output chunk, and
-one-shot output capacity values for representative JPEG fixtures. It also keeps broader
+peak-allocation, row-cache, effective slice work, reusable output chunk, encoder
+memory report, and one-shot output capacity values for representative JPEG
+fixtures. It also keeps broader
 color-subsampling coverage that fails if the production arena path regresses to
 full component-plane allocation or if the default JPEG tool path regresses to
 allocating `sh264e_get_max_output_size()` for H.264 output.

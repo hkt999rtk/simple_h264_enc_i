@@ -129,6 +129,9 @@ used by the last JPEG encode. For `2560x1440` 4:2:0 source JPEGs, the 1:1 fast
 path reduces retained row cache to 61,440 bytes and effectively uses 0 bytes of
 slice staging for I420 or 20,480 bytes for NV12, while the public work-buffer
 capacity remains conservatively 61,440 bytes.
+`sh264e_encoder_get_memory_report` reports the fixed-v1 encoder heap breakdown
+without creating an encoder; `docs/ENCODER_MEMORY_REPORT.md` records the current
+191,048-byte total and sub-block composition.
 The arena-backed production path now uses MCU-row streaming by default. It keeps only NanoJPEG's current MCU-row buffers and the retained row cache, then feeds one scaled output slice at a time to the progressive encoder.
 The printed peak allocation includes the streaming row cache and MCU-row temp buffers; it excludes caller-owned JPEG input, arena header overhead, slice-work, H.264 output buffers, and NanoJPEG's compact in-context Huffman metadata.
 Diagnostic-only JPEG allocation-limit and streaming-prototype hooks are gated by `SH264E_ENABLE_JPEG_TEST_HOOKS` and declared in `tests/sh264e_jpeg_test_hooks.h`; they are not normal application APIs.

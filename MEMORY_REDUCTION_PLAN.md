@@ -41,7 +41,7 @@ the compressed JPEG input buffer:
 | --- | ---: | --- |
 | JPEG decoded component arena | 5,529,600 | Main target for this plan |
 | NanoJPEG static context BSS | about 525,032 | Mainly VLC tables |
-| Encoder internal heap | about 191,024 | One encoder instance |
+| Encoder internal heap | 191,048 | One encoder instance; see `docs/ENCODER_MEMORY_REPORT.md` |
 | H.264 header + reusable slice output buffers | 128,000 | Caller-owned |
 | JPEG/scaler output slice work buffer | 61,440 | Caller-owned |
 | Total | about 6.14 MiB | Excludes compressed JPEG input |
@@ -272,7 +272,7 @@ Memory target for `2560x1440` JPEG 4:2:0 embedded path:
 | JPEG work arena | 123,024 |
 | JPEG/scaler slice work | 61,440 |
 | Reusable H.264 output chunk buffer | 4,096 |
-| Encoder heap | about 191,024 |
+| Encoder heap | 191,048 |
 | Static mutable RAM | about 4,529 |
 | Total, excluding compressed JPEG input and `.rodata` | about 390 KiB budget class |
 

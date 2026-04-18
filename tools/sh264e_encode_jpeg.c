@@ -147,6 +147,7 @@ int main(int argc, char **argv)
     const char *output_path;
     sh264e_pixfmt_t pixfmt;
     sh264e_config_t config;
+    sh264e_encoder_memory_report_t encoder_memory_report;
     sh264e_encoder_t *encoder = NULL;
     sh264e_status_t status;
     uint8_t *jpeg_data = NULL;
@@ -279,6 +280,11 @@ int main(int argc, char **argv)
     config.pixfmt = pixfmt;
     config.qp = SH264E_DEFAULT_QP;
 
+    status = sh264e_encoder_get_memory_report(&config, &encoder_memory_report);
+    if (status != SH264E_OK) {
+        fprintf(stderr, "sh264e_encoder_get_memory_report failed: %s\n", sh264e_status_string(status));
+        goto done;
+    }
     status = sh264e_jpeg_get_slice_buffer_size(&work_size);
     if (status != SH264E_OK) {
         fprintf(stderr, "sh264e_jpeg_get_slice_buffer_size failed: %s\n", sh264e_status_string(status));
@@ -457,6 +463,13 @@ int main(int argc, char **argv)
                    !output_consumer_test && output_chunk_capacity != 0u) {
             printf("jpeg output buffer bytes: %zu\n", output_chunk_capacity);
         }
+        printf("encoder memory total bytes: %zu\n", encoder_memory_report.total_bytes);
+        printf("encoder context bytes: %zu\n", encoder_memory_report.context_bytes);
+        printf("encoder bitstream scratch bytes: %zu\n",
+               encoder_memory_report.bitstream_scratch_bytes);
+        printf("encoder recon luma bytes: %zu\n", encoder_memory_report.recon_luma_bytes);
+        printf("encoder recon chroma bytes: %zu\n", encoder_memory_report.recon_chroma_bytes);
+        printf("encoder neighbor state bytes: %zu\n", encoder_memory_report.neighbor_state_bytes);
     }
     printf("encoded JPEG input to progressive IDR frame\n");
     rc = 0;

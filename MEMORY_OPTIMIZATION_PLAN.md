@@ -20,7 +20,7 @@ Current `2560x1440` 4:2:0 embedded budget, excluding compressed JPEG input and
 | JPEG work arena | 123,024 | 1:1 4:2:0 path: one MCU-row cache plus NanoJPEG MCU-row temp buffers |
 | JPEG/scaler slice work | 61,440 | API capacity; 1:1 effective use is I420 0 bytes, NV12 20,480 bytes |
 | Reusable H.264 output chunk buffer | 4,096 | Byte-stream flush buffer |
-| Encoder heap | about 191,024 | Needs detailed breakdown |
+| Encoder heap | 191,048 | See `docs/ENCODER_MEMORY_REPORT.md` |
 | Static mutable RAM | about 4,529 | Excludes `.rodata` |
 | Total | about 390 KiB class | Excludes compressed JPEG input |
 
@@ -99,11 +99,22 @@ Target the opaque encoder heap line item:
 
 | Current | Target |
 | ---: | --- |
-| about 191,024 bytes | measured sub-block report |
+| about 191,024 bytes | measured 191,048-byte sub-block report |
 
 This is a measurement issue before optimization. The report should identify the
 major encoder state contributors such as reconstructed storage, neighbor/nonzero
 state, bitstream scratch, and context/config overhead.
+
+Measured fixed-v1 composition:
+
+| Block | Bytes |
+| --- | ---: |
+| Encoder context/config | 72 |
+| Bitstream scratch | 126,976 |
+| Reconstructed luma slice | 40,960 |
+| Reconstructed chroma slices | 20,480 |
+| Neighbor/nonzero state | 2,560 |
+| Total encoder memory | 191,048 |
 
 Acceptance focus:
 

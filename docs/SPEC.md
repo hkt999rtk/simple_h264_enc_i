@@ -330,6 +330,7 @@ sh264e_encode_jpeg_idr_with_arena_stream
 sh264e_jpeg_get_last_allocation_stats
 sh264e_jpeg_get_last_streaming_cache_bytes
 sh264e_jpeg_get_last_slice_work_bytes
+sh264e_encoder_get_memory_report
 ```
 
 The JPEG APIs accept a caller-provided JPEG byte buffer. File I/O remains outside the library.
@@ -371,6 +372,11 @@ capacity retained by the last MCU-row streaming query or encode call.
 by the last JPEG encode. These are diagnostic/stat APIs for regression reporting; allocation-limit and
 streaming-prototype hooks remain private test hooks gated by
 `SH264E_ENABLE_JPEG_TEST_HOOKS`.
+`sh264e_encoder_get_memory_report` reports fixed-v1 encoder-owned memory
+without constructing an encoder. The current report is 191,048 bytes total:
+72 bytes of context/config, 126,976 bytes of bitstream scratch, 40,960 bytes of
+reconstructed luma slice storage, 20,480 bytes of reconstructed chroma slice
+storage, and 2,560 bytes of neighbor/nonzero state.
 
 NanoJPEG decodes baseline JPEG through MCU-row streaming. The library scales decoded component rows directly into one YUV420 encoder slice at a time:
 
@@ -556,6 +562,7 @@ The generated bitstream must:
     * Luma: `2560 * 16`
     * Chroma U: `1280 * 8`
     * Chroma V: `1280 * 8`
+    * Neighbor/nonzero state: `640 * 4`
 
 ---
 
