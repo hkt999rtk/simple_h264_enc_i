@@ -87,6 +87,12 @@
 // NJ_VLC_FAST_BITS=8      = Use a small per-Huffman-table fast decode table
 //                           for codes up to this bit length, with canonical
 //                           Huffman fallback for longer codes (default).
+// NJ_ENABLE_FULL_IMAGE_DECODE=0
+//                         = Do not expose NanoJPEG's legacy full-image RGB or
+//                           full component-plane decode entry points (default).
+// NJ_ENABLE_FULL_IMAGE_DECODE=1
+//                         = Expose the legacy full-image/component-plane decode
+//                           entry points for explicit debug/example builds only.
 
 
 // API
@@ -133,6 +139,15 @@ typedef enum _nj_result {
 // using any of the other NanoJPEG functions.
 void njInit(void);
 
+#if defined(_NJ_EXAMPLE_PROGRAM) && !defined(NJ_ENABLE_FULL_IMAGE_DECODE)
+#define NJ_ENABLE_FULL_IMAGE_DECODE 1
+#endif
+
+#ifndef NJ_ENABLE_FULL_IMAGE_DECODE
+#define NJ_ENABLE_FULL_IMAGE_DECODE 0
+#endif
+
+#if NJ_ENABLE_FULL_IMAGE_DECODE
 // njDecode: Decode a JPEG image.
 // Decodes a memory dump of a JPEG file into internal buffers.
 // Parameters:
@@ -146,6 +161,7 @@ nj_result_t njDecode(const void* jpeg, const int size);
 // JPEGs. Component plane accessors below expose the decoded Y/Cb/Cr or
 // grayscale planes, including their native dimensions and stride.
 nj_result_t njDecodeComponents(const void* jpeg, const int size);
+#endif
 
 typedef int (*nj_mcu_row_callback_t)(int mcu_y, void* user);
 nj_result_t njDecodeMcuRows(const void* jpeg, const int size, nj_mcu_row_callback_t callback, void* user);
@@ -158,6 +174,7 @@ int njGetWidth(void);
 // image. If njDecode() failed, the result of njGetHeight() is undefined.
 int njGetHeight(void);
 
+#if NJ_ENABLE_FULL_IMAGE_DECODE
 // njIsColor: Return 1 if the most recently decoded image is a color image
 // (RGB) or 0 if it is a grayscale image. If njDecode() failed, the result
 // of njGetWidth() is undefined.
@@ -176,6 +193,7 @@ unsigned char* njGetImage(void);
 // by njGetImage(). If njDecode() failed, the result of njGetImageSize() is
 // undefined.
 int njGetImageSize(void);
+#endif
 
 int njGetComponentCount(void);
 const unsigned char* njGetComponentPixels(int index);
@@ -816,6 +834,8 @@ NJ_INLINE void njDecodeScan(void) {
     nj.error = __NJ_FINISHED;
 }
 
+#if NJ_ENABLE_FULL_IMAGE_DECODE
+
 #if NJ_CHROMA_FILTER
 
 #define CF4A (-9)
@@ -964,6 +984,8 @@ NJ_INLINE void njConvert(void) {
     }
 }
 
+#endif
+
 void njInit(void) {
     njFillMem(&nj, 0, sizeof(nj_context_t));
 }
@@ -1012,9 +1034,17 @@ static nj_result_t njDecodeInternal(const void* jpeg,
     }
     if (nj.error != __NJ_FINISHED) return nj.error;
     nj.error = NJ_OK;
-    if (!nj.decode_components_only) njConvert();
+    if (!nj.decode_components_only) {
+        #if NJ_ENABLE_FULL_IMAGE_DECODE
+            njConvert();
+        #else
+            return NJ_UNSUPPORTED;
+        #endif
+    }
     return nj.error;
 }
+
+#if NJ_ENABLE_FULL_IMAGE_DECODE
 
 nj_result_t njDecode(const void* jpeg, const int size) {
     return njDecodeInternal(jpeg, size, 0, 0, NULL, NULL);
@@ -1024,6 +1054,8 @@ nj_result_t njDecodeComponents(const void* jpeg, const int size) {
     return njDecodeInternal(jpeg, size, 1, 0, NULL, NULL);
 }
 
+#endif
+
 nj_result_t njDecodeMcuRows(const void* jpeg, const int size, nj_mcu_row_callback_t callback, void* user) {
     if (!callback) return NJ_INTERNAL_ERR;
     return njDecodeInternal(jpeg, size, 1, 1, callback, user);
@@ -1031,9 +1063,11 @@ nj_result_t njDecodeMcuRows(const void* jpeg, const int size, nj_mcu_row_callbac
 
 int njGetWidth(void)            { return nj.width; }
 int njGetHeight(void)           { return nj.height; }
+#if NJ_ENABLE_FULL_IMAGE_DECODE
 int njIsColor(void)             { return (nj.ncomp != 1); }
 unsigned char* njGetImage(void) { return (nj.ncomp == 1) ? nj.comp[0].pixels : nj.rgb; }
 int njGetImageSize(void)        { return nj.width * nj.height * nj.ncomp; }
+#endif
 int njGetComponentCount(void)   { return nj.ncomp; }
 const unsigned char* njGetComponentPixels(int index) {
     if ((index < 0) || (index >= nj.ncomp)) return NULL;
