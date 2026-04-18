@@ -22,6 +22,12 @@ short codes, and falls back to canonical range lookup for longer codes. The
 streaming row cache is the decoded-image replacement for the previous full
 component planes.
 
+Regression tools read tracked allocation stats through
+`sh264e_jpeg_get_last_allocation_stats` and row-cache capacity through
+`sh264e_jpeg_get_last_streaming_cache_bytes`. Allocation-limit fault injection
+and streaming-prototype comparison entry points are private test hooks gated by
+`SH264E_ENABLE_JPEG_TEST_HOOKS`, not production application APIs.
+
 For the `2560x1440` 4:2:0 row, the measured peak breaks down as:
 
 | Block | Bytes |

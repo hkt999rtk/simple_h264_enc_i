@@ -5,34 +5,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-void sh264e_jpeg_set_test_allocation_limit(size_t max_bytes);
-size_t sh264e_jpeg_get_last_streaming_cache_bytes(void);
-sh264e_status_t sh264e_jpeg_get_streaming_work_size(const uint8_t *jpeg_data,
-                                                    size_t jpeg_size,
-                                                    size_t *out_size);
-sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype(sh264e_encoder_t *encoder,
-                                                           const uint8_t *jpeg_data,
-                                                           size_t jpeg_size,
-                                                           uint8_t *work_buffer,
-                                                           size_t work_buffer_capacity,
-                                                           uint8_t *out,
-                                                           size_t out_capacity,
-                                                           size_t *out_size);
-sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype_with_arena(sh264e_encoder_t *encoder,
-                                                                      const uint8_t *jpeg_data,
-                                                                      size_t jpeg_size,
-                                                                      uint8_t *jpeg_arena,
-                                                                      size_t jpeg_arena_size,
-                                                                      uint8_t *work_buffer,
-                                                                      size_t work_buffer_capacity,
-                                                                      uint8_t *out,
-                                                                      size_t out_capacity,
-                                                                      size_t *out_size);
+#ifndef SH264E_ENABLE_JPEG_TEST_HOOKS
+#define SH264E_ENABLE_JPEG_TEST_HOOKS 0
+#endif
+
+#if SH264E_ENABLE_JPEG_TEST_HOOKS
+#include "sh264e_jpeg_test_hooks.h"
+#endif
 
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-            "usage: %s [--streaming-prototype] [--test-allocation-limit BYTES] "
+            "usage: %s "
+#if SH264E_ENABLE_JPEG_TEST_HOOKS
+            "[--streaming-prototype] [--test-allocation-limit BYTES] "
+#endif
             "[--test-arena-shrink BYTES] [--test-arena-offset BYTES] "
             "[--test-one-shot-output] [--test-output-consumer] "
             "[--test-output-consumer-fail-after CHUNKS] "
@@ -185,10 +172,19 @@ int main(int argc, char **argv)
     int rc = 1;
 
     while (argi < argc) {
+#if SH264E_ENABLE_JPEG_TEST_HOOKS
         if (strcmp(argv[argi], "--streaming-prototype") == 0) {
             streaming_prototype = 1;
             argi++;
-        } else if (strcmp(argv[argi], "--test-one-shot-output") == 0) {
+        } else if (argi + 1 < argc && strcmp(argv[argi], "--test-allocation-limit") == 0) {
+            if (!parse_size(argv[argi + 1], &allocation_limit)) {
+                usage(argv[0]);
+                return 2;
+            }
+            argi += 2;
+        } else
+#endif
+        if (strcmp(argv[argi], "--test-one-shot-output") == 0) {
             one_shot_output_test = 1;
             argi++;
         } else if (strcmp(argv[argi], "--test-output-consumer") == 0) {
@@ -202,12 +198,6 @@ int main(int argc, char **argv)
             }
             output_consumer_test = 1;
             output_consumer_fail_after = (int)fail_after;
-            argi += 2;
-        } else if (argi + 1 < argc && strcmp(argv[argi], "--test-allocation-limit") == 0) {
-            if (!parse_size(argv[argi + 1], &allocation_limit)) {
-                usage(argv[0]);
-                return 2;
-            }
             argi += 2;
         } else if (argi + 1 < argc && strcmp(argv[argi], "--test-arena-shrink") == 0) {
             if (!parse_size(argv[argi + 1], &arena_shrink)) {
@@ -252,11 +242,7 @@ int main(int argc, char **argv)
         goto done;
     }
     if (allocation_limit == (size_t)-1) {
-        if (streaming_prototype) {
-            status = sh264e_jpeg_get_streaming_work_size(jpeg_data, jpeg_size, &jpeg_work_size);
-        } else {
-            status = sh264e_jpeg_get_work_size(jpeg_data, jpeg_size, &jpeg_work_size);
-        }
+        status = sh264e_jpeg_get_work_size(jpeg_data, jpeg_size, &jpeg_work_size);
         if (status != SH264E_OK) {
             fprintf(stderr, "JPEG work-size query failed: %s\n", sh264e_status_string(status));
             goto done;
@@ -344,10 +330,14 @@ int main(int argc, char **argv)
     }
 
     if (allocation_limit != (size_t)-1) {
+#if SH264E_ENABLE_JPEG_TEST_HOOKS
         sh264e_jpeg_set_test_allocation_limit(allocation_limit);
         status = sh264e_encode_jpeg_idr(encoder, jpeg_data, jpeg_size,
                                         work, work_size,
                                         output_buf, output_capacity, &output_size);
+#else
+        status = SH264E_ERR_UNSUPPORTED_CONFIG;
+#endif
     } else if (one_shot_output_test) {
         status = sh264e_encode_jpeg_idr_with_arena(encoder, jpeg_data, jpeg_size,
                                                    jpeg_arena, jpeg_arena_size,
@@ -387,11 +377,15 @@ int main(int argc, char **argv)
             printf("jpeg output chunk buffer bytes: %zu\n", output_chunk_capacity);
         }
     } else if (streaming_prototype) {
+#if SH264E_ENABLE_JPEG_TEST_HOOKS
         status = sh264e_encode_jpeg_idr_streaming_prototype_with_arena(
             encoder, jpeg_data, jpeg_size,
             jpeg_arena, jpeg_arena_size,
             work, work_size,
             output_buf, output_capacity, &output_size);
+#else
+        status = SH264E_ERR_UNSUPPORTED_CONFIG;
+#endif
     } else {
         output_consumer_state_t consumer_state;
 
