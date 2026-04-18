@@ -160,6 +160,7 @@ int main(int argc, char **argv)
     size_t jpeg_size = 0;
     size_t jpeg_work_size = 0;
     size_t jpeg_arena_size = 0;
+    size_t encoder_work_size = 0;
     size_t work_size = 0;
     size_t output_capacity = 0;
     size_t output_chunk_capacity = 0;
@@ -283,6 +284,11 @@ int main(int argc, char **argv)
     status = sh264e_encoder_get_memory_report(&config, &encoder_memory_report);
     if (status != SH264E_OK) {
         fprintf(stderr, "sh264e_encoder_get_memory_report failed: %s\n", sh264e_status_string(status));
+        goto done;
+    }
+    status = sh264e_encoder_get_work_size(&config, &encoder_work_size);
+    if (status != SH264E_OK) {
+        fprintf(stderr, "sh264e_encoder_get_work_size failed: %s\n", sh264e_status_string(status));
         goto done;
     }
     status = sh264e_jpeg_get_slice_buffer_size(&work_size);
@@ -464,6 +470,7 @@ int main(int argc, char **argv)
             printf("jpeg output buffer bytes: %zu\n", output_chunk_capacity);
         }
         printf("encoder memory total bytes: %zu\n", encoder_memory_report.total_bytes);
+        printf("encoder arena work bytes: %zu\n", encoder_work_size);
         printf("encoder context bytes: %zu\n", encoder_memory_report.context_bytes);
         printf("encoder bitstream scratch bytes: %zu\n",
                encoder_memory_report.bitstream_scratch_bytes);

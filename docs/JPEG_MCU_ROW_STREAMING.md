@@ -130,11 +130,12 @@ For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
 | JPEG work arena | 123,024 |
 | JPEG/scaler slice work | 61,440 |
 | Reusable H.264 output chunk buffer | 4,096 |
-| Encoder heap | 191,048 |
+| Encoder arena | 191,055 |
 | Static mutable RAM | about 4,529 |
 
-`docs/ENCODER_MEMORY_REPORT.md` breaks the encoder heap row into context,
-bitstream scratch, reconstructed-slice storage, and neighbor/nonzero state.
+`docs/ENCODER_MEMORY_REPORT.md` breaks the encoder arena row into context,
+bitstream scratch, reconstructed-slice storage, neighbor/nonzero state, and
+arena alignment padding.
 
 The hidden one-shot comparison path still reports the complete H.264 output
 capacity, `11,428,864` bytes, when testing one-shot APIs. That is caller-owned

@@ -83,17 +83,17 @@ For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
 | JPEG work arena | 123,024 |
 | JPEG/scaler slice work | 61,440 |
 | Reusable H.264 output chunk buffer | 4,096 |
-| Encoder heap | 191,048 |
+| Encoder arena | 191,055 |
 | Static mutable RAM | about 4,529 |
 | Rounded planning budget | about 390 KiB |
 
-The arithmetic subtotal of the rows above is about 384,113 bytes, or about
-375 KiB in binary units. The rounded planning budget is now about 390 KiB for
+The arithmetic subtotal of the rows above is about 384,120 bytes, or about
+375 KiB in binary units. The rounded planning budget remains about 390 KiB for
 this embedded path.
 
-The encoder heap row is measured by `sh264e_encoder_get_memory_report`; see
-`docs/ENCODER_MEMORY_REPORT.md` for the context, bitstream scratch,
-reconstructed-slice, and neighbor-state breakdown.
+The encoder arena row is reported by `sh264e_encoder_get_work_size`; see
+`docs/ENCODER_MEMORY_REPORT.md` for the raw context, bitstream scratch,
+reconstructed-slice, neighbor-state breakdown, and arena alignment padding.
 
 ## Regression Coverage
 

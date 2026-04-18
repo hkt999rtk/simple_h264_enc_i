@@ -20,7 +20,7 @@ Current `2560x1440` 4:2:0 embedded budget, excluding compressed JPEG input and
 | JPEG work arena | 123,024 | 1:1 4:2:0 path: one MCU-row cache plus NanoJPEG MCU-row temp buffers |
 | JPEG/scaler slice work | 61,440 | API capacity; 1:1 effective use is I420 0 bytes, NV12 20,480 bytes |
 | Reusable H.264 output chunk buffer | 4,096 | Byte-stream flush buffer |
-| Encoder heap | 191,048 | See `docs/ENCODER_MEMORY_REPORT.md` |
+| Encoder arena | 191,055 | Caller-provided placement; see `docs/ENCODER_MEMORY_REPORT.md` |
 | Static mutable RAM | about 4,529 | Excludes `.rodata` |
 | Total | about 390 KiB class | Excludes compressed JPEG input |
 
@@ -99,7 +99,7 @@ Target the opaque encoder heap line item:
 
 | Current | Target |
 | ---: | --- |
-| about 191,024 bytes | measured 191,048-byte sub-block report |
+| about 191,024 bytes | measured 191,048-byte sub-block report; 191,055-byte arena |
 
 This is a measurement issue before optimization. The report should identify the
 major encoder state contributors such as reconstructed storage, neighbor/nonzero
@@ -148,6 +148,14 @@ Acceptance focus:
 * Existing heap-backed `sh264e_encoder_create` remains compatible.
 * Arena-backed creation has deterministic alignment and too-small behavior.
 * `sh264e_encoder_destroy` must not free caller-owned arena memory.
+
+Implemented arena contract:
+
+* `sh264e_encoder_get_work_size` reports 191,055 bytes for the fixed v1 config,
+  including worst-case opaque-control alignment padding.
+* `sh264e_encoder_create_with_arena` supports misaligned caller memory and
+  avoids production heap allocation for encoder-owned state.
+* Heap-backed creation remains available as a convenience wrapper.
 
 ### #52 Streaming Compressed JPEG Input Source
 

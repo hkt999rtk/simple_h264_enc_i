@@ -81,6 +81,8 @@ The public API uses the `sh264e_` prefix.
 Required API entry points:
 
 * `sh264e_encoder_create`
+* `sh264e_encoder_get_work_size`
+* `sh264e_encoder_create_with_arena`
 * `sh264e_encoder_destroy`
 * `sh264e_begin_idr`
 * `sh264e_encode_idr_slice`
@@ -377,6 +379,10 @@ without constructing an encoder. The current report is 191,048 bytes total:
 72 bytes of context/config, 126,976 bytes of bitstream scratch, 40,960 bytes of
 reconstructed luma slice storage, 20,480 bytes of reconstructed chroma slice
 storage, and 2,560 bytes of neighbor/nonzero state.
+`sh264e_encoder_get_work_size` reports the caller-provided arena requirement for
+the same fixed-v1 encoder state, currently 191,055 bytes including worst-case
+alignment padding. `sh264e_encoder_create_with_arena` constructs an encoder in
+that caller-owned block; `sh264e_encoder_destroy` does not free arena memory.
 
 NanoJPEG decodes baseline JPEG through MCU-row streaming. The library scales decoded component rows directly into one YUV420 encoder slice at a time:
 
