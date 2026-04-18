@@ -13,6 +13,8 @@
 #include "sh264e_jpeg_test_hooks.h"
 #endif
 
+#define DEFAULT_OUTPUT_CHUNK_CAPACITY 4096u
+
 static void usage(const char *argv0)
 {
     fprintf(stderr,
@@ -22,7 +24,7 @@ static void usage(const char *argv0)
 #endif
             "[--test-arena-shrink BYTES] [--test-arena-offset BYTES] "
             "[--test-one-shot-output] [--test-output-consumer] "
-            "[--test-output-consumer-fail-after CHUNKS] "
+            "[--test-output-consumer-fail-after CHUNKS] [--test-output-chunk-size BYTES] "
             "--format i420|nv12 input.jpg output.h264\n",
             argv0);
 }
@@ -160,6 +162,7 @@ int main(int argc, char **argv)
     size_t work_size = 0;
     size_t output_capacity = 0;
     size_t output_chunk_capacity = 0;
+    size_t output_chunk_override = 0;
     size_t output_size = 0;
     size_t allocation_limit = (size_t)-1;
     size_t arena_shrink = 0;
@@ -198,6 +201,13 @@ int main(int argc, char **argv)
             }
             output_consumer_test = 1;
             output_consumer_fail_after = (int)fail_after;
+            argi += 2;
+        } else if (argi + 1 < argc && strcmp(argv[argi], "--test-output-chunk-size") == 0) {
+            if (!parse_size(argv[argi + 1], &output_chunk_override) ||
+                output_chunk_override == 0u) {
+                usage(argv[0]);
+                return 2;
+            }
             argi += 2;
         } else if (argi + 1 < argc && strcmp(argv[argi], "--test-arena-shrink") == 0) {
             if (!parse_size(argv[argi + 1], &arena_shrink)) {
@@ -241,6 +251,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "--test-one-shot-output cannot be combined with other output test modes\n");
         goto done;
     }
+    if (output_chunk_override != 0u &&
+        (streaming_prototype || one_shot_output_test || allocation_limit != (size_t)-1)) {
+        fprintf(stderr, "--test-output-chunk-size requires streaming output mode\n");
+        goto done;
+    }
     if (allocation_limit == (size_t)-1) {
         status = sh264e_jpeg_get_work_size(jpeg_data, jpeg_size, &jpeg_work_size);
         if (status != SH264E_OK) {
@@ -278,20 +293,9 @@ int main(int argc, char **argv)
         }
     }
     if (allocation_limit == (size_t)-1 && !streaming_prototype && !one_shot_output_test) {
-        size_t header_capacity = 0u;
-        size_t slice_capacity = 0u;
-
-        status = sh264e_get_max_header_output_size(&config, &header_capacity);
-        if (status != SH264E_OK) {
-            fprintf(stderr, "sh264e_get_max_header_output_size failed: %s\n", sh264e_status_string(status));
-            goto done;
-        }
-        status = sh264e_get_max_slice_output_size(&config, &slice_capacity);
-        if (status != SH264E_OK) {
-            fprintf(stderr, "sh264e_get_max_slice_output_size failed: %s\n", sh264e_status_string(status));
-            goto done;
-        }
-        output_chunk_capacity = header_capacity > slice_capacity ? header_capacity : slice_capacity;
+        output_chunk_capacity = output_chunk_override != 0u
+                                    ? output_chunk_override
+                                    : DEFAULT_OUTPUT_CHUNK_CAPACITY;
     }
 
     if (allocation_limit == (size_t)-1) {
@@ -367,8 +371,8 @@ int main(int argc, char **argv)
                 status = probe_status;
             }
         }
-        if (status == SH264E_OK && consumer_state.chunks != 1u + SH264E_V1_SLICE_COUNT) {
-            fprintf(stderr, "output consumer saw %u chunks, expected %u\n",
+        if (status == SH264E_OK && consumer_state.chunks < 1u + SH264E_V1_SLICE_COUNT) {
+            fprintf(stderr, "output consumer saw %u chunks, expected at least %u\n",
                     consumer_state.chunks, 1u + SH264E_V1_SLICE_COUNT);
             status = SH264E_ERR_INTERNAL;
         }
@@ -404,8 +408,8 @@ int main(int argc, char **argv)
             output_chunk_buf, output_chunk_capacity,
             collect_output_chunk, &consumer_state);
         output_size = consumer_state.size;
-        if (status == SH264E_OK && consumer_state.chunks != 1u + SH264E_V1_SLICE_COUNT) {
-            fprintf(stderr, "output consumer saw %u chunks, expected %u\n",
+        if (status == SH264E_OK && consumer_state.chunks < 1u + SH264E_V1_SLICE_COUNT) {
+            fprintf(stderr, "output consumer saw %u chunks, expected at least %u\n",
                     consumer_state.chunks, 1u + SH264E_V1_SLICE_COUNT);
             status = SH264E_ERR_INTERNAL;
         }

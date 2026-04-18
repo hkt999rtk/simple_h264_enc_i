@@ -33,8 +33,9 @@ PRODUCTION_MEMORY_1440P_420 = {
     "peak": 245_760,
     "cache": STREAMING_CACHE_BYTES_1440P_420,
 }
-H264_OUTPUT_CONSUMER_CHUNKS = 1 + 90
-H264_OUTPUT_CHUNK_BYTES = 126_976
+H264_OUTPUT_CONSUMER_CHUNKS_MIN = 1 + 90
+H264_OUTPUT_CHUNK_BYTES = 4_096
+H264_TINY_OUTPUT_CHUNK_BYTES = 7
 H264_ONE_SHOT_OUTPUT_BYTES = 11_428_864
 EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420 = (
     PRODUCTION_MEMORY_1440P_420["work"]
@@ -350,9 +351,9 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
                 f"JPEG default path regressed to one-shot output buffering: got {output_buffer}"
             )
         chunks = parse_jpeg_metric(result.stdout, "jpeg output consumer chunks:")
-        if chunks != H264_OUTPUT_CONSUMER_CHUNKS:
+        if chunks < H264_OUTPUT_CONSUMER_CHUNKS_MIN:
             raise RuntimeError(
-                f"JPEG output consumer chunk count changed: got {chunks}, expected {H264_OUTPUT_CONSUMER_CHUNKS}"
+                f"JPEG output consumer chunk count changed: got {chunks}, expected at least {H264_OUTPUT_CONSUMER_CHUNKS_MIN}"
             )
         chunk_bytes = parse_jpeg_metric(result.stdout, "jpeg output chunk buffer bytes:")
         if chunk_bytes != H264_OUTPUT_CHUNK_BYTES:
@@ -398,24 +399,30 @@ def encode_jpeg_streaming_prototype(args, fmt, jpeg_input, bitstream, expected_c
         )
 
 
-def encode_jpeg_output_consumer(args, fmt, jpeg_input, bitstream):
-    result = run_capture([
+def encode_jpeg_output_consumer(args, fmt, jpeg_input, bitstream, extra_args=None,
+                                expected_chunk_bytes=H264_OUTPUT_CHUNK_BYTES):
+    command = [
         args.jpeg_encoder,
         "--test-output-consumer",
+    ]
+    if extra_args:
+        command.extend(extra_args)
+    command.extend([
         "--format",
         fmt,
         str(jpeg_input),
         str(bitstream),
     ])
+    result = run_capture(command)
     chunks = parse_jpeg_metric(result.stdout, "jpeg output consumer chunks:")
-    if chunks != H264_OUTPUT_CONSUMER_CHUNKS:
+    if chunks < H264_OUTPUT_CONSUMER_CHUNKS_MIN:
         raise RuntimeError(
-            f"JPEG output consumer chunk count changed: got {chunks}, expected {H264_OUTPUT_CONSUMER_CHUNKS}"
+            f"JPEG output consumer chunk count changed: got {chunks}, expected at least {H264_OUTPUT_CONSUMER_CHUNKS_MIN}"
         )
     chunk_bytes = parse_jpeg_metric(result.stdout, "jpeg output chunk buffer bytes:")
-    if chunk_bytes != H264_OUTPUT_CHUNK_BYTES:
+    if chunk_bytes != expected_chunk_bytes:
         raise RuntimeError(
-            f"JPEG output consumer chunk capacity changed: got {chunk_bytes}, expected {H264_OUTPUT_CHUNK_BYTES}"
+            f"JPEG output consumer chunk capacity changed: got {chunk_bytes}, expected {expected_chunk_bytes}"
         )
     if chunk_bytes >= H264_ONE_SHOT_OUTPUT_BYTES:
         raise RuntimeError(
@@ -565,6 +572,18 @@ def main():
                 validate_bitstream(args.ffprobe, args.ffmpeg, consumer_output)
                 if consumer_output.read_bytes() != one_shot_output.read_bytes():
                     raise RuntimeError("JPEG memory consumer bitstream differs from one-shot output")
+                tiny_consumer_output = workdir / "output_jpeg_consumer_tiny_yuvj420p_i420.h264"
+                encode_jpeg_output_consumer(
+                    args,
+                    fmt,
+                    jpeg_input,
+                    tiny_consumer_output,
+                    ["--test-output-chunk-size", str(H264_TINY_OUTPUT_CHUNK_BYTES)],
+                    H264_TINY_OUTPUT_CHUNK_BYTES,
+                )
+                validate_bitstream(args.ffprobe, args.ffmpeg, tiny_consumer_output)
+                if tiny_consumer_output.read_bytes() != one_shot_output.read_bytes():
+                    raise RuntimeError("JPEG tiny-chunk consumer bitstream differs from one-shot output")
                 run_expect_fail([
                     args.jpeg_encoder,
                     "--test-output-consumer-fail-after",
@@ -599,10 +618,10 @@ def main():
     validate_bitstream(args.ffprobe, args.ffmpeg, large_heap_wrapper_output)
     if large_heap_wrapper_output.read_bytes() != large_jpeg_output.read_bytes():
         raise RuntimeError("JPEG heap wrapper bitstream differs from arena streaming output")
-    if EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420 != 434_320:
+    if EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420 != 311_440:
         raise RuntimeError(
             "2560x1440 JPEG streaming memory subtotal changed: "
-            f"got {EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420}, expected 434320"
+            f"got {EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420}, expected 311440"
         )
     encode_jpeg_streaming_prototype(args, "i420", large_jpeg_input, large_streaming_output,
                                     STREAMING_CACHE_BYTES_1440P_420)

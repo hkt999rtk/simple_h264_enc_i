@@ -103,7 +103,7 @@ Required public API concepts:
 * `sh264e_slice_t` — caller-provided progressive slice buffers
 * `sh264e_frame_t` — caller-provided input frame buffers
 * `sh264e_encoder_t` — opaque encoder handle
-* `sh264e_output_consumer_t` — callback that consumes complete Annex B output chunks
+* `sh264e_output_consumer_t` — callback that consumes Annex B output byte chunks
 
 The output bitstream buffer is provided by the caller. The library reports bytes written or returns a buffer-too-small error.
 
@@ -354,7 +354,13 @@ typedef sh264e_status_t (*sh264e_output_consumer_t)(
     size_t size);
 ```
 
-The streaming-output JPEG API should use a reusable caller-provided output chunk buffer sized for `max(header, one slice)`, call the consumer once for SPS/PPS and once per IDR slice, and stop deterministically if the consumer returns an error. The library must not call file APIs; tools/tests may implement a consumer that writes to a file.
+The streaming-output JPEG API uses the caller-provided output buffer as a
+reusable byte-stream flush buffer. It may split SPS/PPS or IDR slice NAL units
+across multiple consumer calls while preserving Annex B ordering, RBSP trailing
+bits, and emulation-prevention bytes across flush boundaries. The production
+tool uses a 4 KiB buffer by default, and smaller buffers are valid for tests or
+tighter embedded integrations. The library must not call file APIs; tools/tests
+may implement a consumer that writes to a file.
 
 `sh264e_jpeg_get_last_allocation_stats` reports the current and peak tracked
 JPEG allocations from the last JPEG work-size query or encode call.

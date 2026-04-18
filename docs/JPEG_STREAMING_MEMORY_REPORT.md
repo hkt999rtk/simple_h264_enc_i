@@ -59,10 +59,11 @@ larger than typical encoded output; the measured `2560x1440` JPEG 4:2:0 fixture
 currently emits about 123 KiB of H.264 data.
 
 The production JPEG tool path now uses the streaming H.264 output consumer API
-and reuses one caller-owned output chunk buffer sized for `max(header, one
-slice)`, currently 126,976 bytes, instead of the 11,428,864-byte one-shot
-maximum output buffer. The tool writes each complete Annex B SPS/PPS or IDR
-slice chunk through a file consumer outside the library.
+and reuses one caller-owned byte-stream flush buffer, currently 4,096 bytes,
+instead of the 11,428,864-byte one-shot maximum output buffer or the old
+126,976-byte one-slice output chunk. The tool writes Annex B chunks through a
+file consumer outside the library; tests also cover tiny chunk boundaries to
+lock emulation-prevention behavior across flushes.
 
 For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
 `.rodata`, the current budget is:
@@ -71,14 +72,14 @@ For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
 | --- | ---: |
 | JPEG work arena | 245,904 |
 | JPEG/scaler slice work | 61,440 |
-| Reusable H.264 output chunk buffer | 126,976 |
+| Reusable H.264 output chunk buffer | 4,096 |
 | Encoder heap | about 191,024 |
 | Static mutable RAM | about 4,529 |
-| Rounded planning budget | about 630 KiB |
+| Rounded planning budget | about 510 KiB |
 
-The arithmetic subtotal of the rows above is about 629,873 bytes, or about
-615 KiB in binary units. The rounded planning budget remains the existing
-about-630 KiB target for this embedded path.
+The arithmetic subtotal of the rows above is about 506,993 bytes, or about
+495 KiB in binary units. The rounded planning budget is now about 510 KiB for
+this embedded path.
 
 ## Regression Coverage
 
@@ -124,22 +125,22 @@ Expected metric lines:
 
 ```text
 1280x720:
-jpeg output consumer chunks: 91
-jpeg output chunk buffer bytes: 126976
+jpeg output consumer chunks: 92
+jpeg output chunk buffer bytes: 4096
 jpeg work arena bytes: 92304
 jpeg slice work bytes: 61440
 jpeg peak allocation bytes: 92160
 jpeg streaming cache bytes: 61440
-jpeg output buffer bytes: 126976
+jpeg output buffer bytes: 4096
 
 2560x1440:
-jpeg output consumer chunks: 91
-jpeg output chunk buffer bytes: 126976
+jpeg output consumer chunks: 92
+jpeg output chunk buffer bytes: 4096
 jpeg work arena bytes: 245904
 jpeg slice work bytes: 61440
 jpeg peak allocation bytes: 245760
 jpeg streaming cache bytes: 184320
-jpeg output buffer bytes: 126976
+jpeg output buffer bytes: 4096
 ```
 
 The hidden one-shot comparison path remains available for regression tests and

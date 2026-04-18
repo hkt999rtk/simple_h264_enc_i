@@ -254,10 +254,11 @@ still need the worst-case capacity when using the one-shot API.
 Implemented streaming behavior:
 
 * The public `sh264e_output_consumer_t` callback lets callers consume complete
-  Annex B chunks outside the library.
-* The arena-backed JPEG streaming-output API reuses one output chunk buffer for
-  SPS/PPS and each IDR slice.
-* Call the consumer once per complete Annex B chunk.
+  or partial Annex B byte-stream chunks outside the library.
+* The arena-backed JPEG streaming-output API reuses one small output chunk
+  buffer while preserving NAL-unit order and emulation-prevention behavior
+  across flush boundaries.
+* The production tool default flush buffer is 4,096 bytes.
 * Keep file I/O outside the library; tools/tests may implement file consumers.
 * Preserve the one-shot API as a convenience wrapper, potentially implemented
   through a memory consumer.
@@ -268,15 +269,16 @@ Memory target for `2560x1440` JPEG 4:2:0 embedded path:
 | --- | ---: |
 | JPEG work arena | 245,904 |
 | JPEG/scaler slice work | 61,440 |
-| Reusable H.264 output chunk buffer | 126,976 |
+| Reusable H.264 output chunk buffer | 4,096 |
 | Encoder heap | about 191,024 |
 | Static mutable RAM | about 4,529 |
-| Total, excluding compressed JPEG input and `.rodata` | about 630 KiB budget class |
+| Total, excluding compressed JPEG input and `.rodata` | about 510 KiB budget class |
 
 Acceptance criteria:
 
 * Embedded JPEG encode path using the streaming-output API no longer requires
-  the 11,428,864-byte max complete-frame output buffer.
+  the 11,428,864-byte max complete-frame output buffer or a one-slice output
+  chunk buffer.
 * Consumer callback errors stop encode deterministically.
 * Tool/test file output uses a consumer implemented outside the library.
 * One-shot API output and streaming-consumer output are byte-for-byte identical

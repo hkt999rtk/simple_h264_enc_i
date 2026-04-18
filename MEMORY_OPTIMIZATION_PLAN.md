@@ -19,10 +19,10 @@ Current `2560x1440` 4:2:0 embedded budget, excluding compressed JPEG input and
 | --- | ---: | --- |
 | JPEG work arena | 245,904 | Includes streaming row cache and NanoJPEG MCU-row temp buffers |
 | JPEG/scaler slice work | 61,440 | One encoder-sized YUV420 slice |
-| Reusable H.264 output chunk buffer | 126,976 | `max(header, one slice)` complete-chunk model |
+| Reusable H.264 output chunk buffer | 4,096 | Byte-stream flush buffer |
 | Encoder heap | about 191,024 | Needs detailed breakdown |
 | Static mutable RAM | about 4,529 | Excludes `.rodata` |
-| Total | about 630 KiB class | Excludes compressed JPEG input |
+| Total | about 510 KiB class | Excludes compressed JPEG input |
 
 The old full decoded JPEG component-frame allocation was 5,529,600 bytes for
 `2560x1440` 4:2:0 and is no longer allowed for public JPEG APIs.
@@ -52,22 +52,21 @@ The old full decoded JPEG component-frame allocation was 5,529,600 bytes for
 
 Target the reusable H.264 output buffer:
 
-| Current | Target |
+| Previous | Implemented target |
 | ---: | ---: |
-| 126,976 bytes | preferably <= 4 KiB, unless implementation data justifies another bound |
+| 126,976 bytes | 4,096 bytes |
 
-The current JPEG streaming-output API emits one complete SPS/PPS chunk and one
-complete IDR slice chunk per callback. That keeps file I/O outside the library
-but still requires a buffer sized for the largest slice. The next step is a
-streaming bit writer / Annex B writer that can flush smaller byte chunks while
-preserving RBSP trailing bits and emulation-prevention behavior.
+The JPEG streaming-output API now flushes Annex B byte chunks through the
+caller-provided consumer instead of waiting for one complete SPS/PPS or IDR
+slice NALU. The implementation keeps file I/O outside the library and preserves
+RBSP trailing bits and emulation-prevention behavior across flush boundaries.
 
 Acceptance focus:
 
 * No complete-slice output buffer required for the embedded streaming path.
 * Consumer failure remains deterministic.
-* Bitstreams remain byte-for-byte identical where practical, or intentionally
-  different but strict-ffmpeg-decodable and documented.
+* Bitstreams remain byte-for-byte identical to the one-shot path for covered
+  fixtures, including tiny chunk-boundary regression coverage.
 
 ### #49 JPEG 1:1 2560x1440 4:2:0 Direct MCU-Row Fast Path
 

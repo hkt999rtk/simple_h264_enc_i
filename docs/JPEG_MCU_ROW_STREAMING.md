@@ -116,13 +116,13 @@ image height:
 | 2560x1440 4:2:0 | 184,320 | 61,440 |
 
 For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
-`.rodata`, the current planning budget is about 630 KiB:
+`.rodata`, the current planning budget is about 510 KiB:
 
 | Block | Bytes |
 | --- | ---: |
 | JPEG work arena | 245,904 |
 | JPEG/scaler slice work | 61,440 |
-| Reusable H.264 output chunk buffer | 126,976 |
+| Reusable H.264 output chunk buffer | 4,096 |
 | Encoder heap | about 191,024 |
 | Static mutable RAM | about 4,529 |
 
