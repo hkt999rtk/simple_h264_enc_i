@@ -124,6 +124,11 @@ Encode a baseline JPEG memory-input path through the library wrapper:
 The JPEG path uses NanoJPEG inside the core library. The tool only reads the JPEG file and writes the `.h264` output; the library API accepts a caller-provided JPEG byte buffer and emits Annex B byte-stream chunks through caller-owned output memory.
 The tool sizes a caller-provided JPEG decoder arena with `sh264e_jpeg_get_work_size`, passes that arena to `sh264e_encode_jpeg_idr_with_arena_stream`, and prints the arena requirement plus current and peak NanoJPEG allocation bytes reported by `sh264e_jpeg_get_last_allocation_stats`.
 The public diagnostic surface also exposes `sh264e_jpeg_get_last_streaming_cache_bytes` so tools and regression tests can report decoded-row cache usage without private declarations.
+`sh264e_jpeg_get_last_slice_work_bytes` reports the effective slice staging
+used by the last JPEG encode. For `2560x1440` 4:2:0 source JPEGs, the 1:1 fast
+path reduces retained row cache to 61,440 bytes and effectively uses 0 bytes of
+slice staging for I420 or 20,480 bytes for NV12, while the public work-buffer
+capacity remains conservatively 61,440 bytes.
 `sh264e_encoder_get_memory_report` reports the fixed-v1 encoder heap breakdown
 without creating an encoder; `docs/ENCODER_MEMORY_REPORT.md` records the current
 191,048-byte total and sub-block composition.

@@ -17,12 +17,12 @@ Current `2560x1440` 4:2:0 embedded budget, excluding compressed JPEG input and
 
 | Block | Bytes | Notes |
 | --- | ---: | --- |
-| JPEG work arena | 245,904 | Includes streaming row cache and NanoJPEG MCU-row temp buffers |
-| JPEG/scaler slice work | 61,440 | One encoder-sized YUV420 slice |
+| JPEG work arena | 123,024 | 1:1 4:2:0 path: one MCU-row cache plus NanoJPEG MCU-row temp buffers |
+| JPEG/scaler slice work | 61,440 | API capacity; 1:1 effective use is I420 0 bytes, NV12 20,480 bytes |
 | Reusable H.264 output chunk buffer | 4,096 | Byte-stream flush buffer |
 | Encoder heap | 191,048 | See `docs/ENCODER_MEMORY_REPORT.md` |
 | Static mutable RAM | about 4,529 | Excludes `.rodata` |
-| Total | about 510 KiB class | Excludes compressed JPEG input |
+| Total | about 390 KiB class | Excludes compressed JPEG input |
 
 The old full decoded JPEG component-frame allocation was 5,529,600 bytes for
 `2560x1440` 4:2:0 and is no longer allowed for public JPEG APIs.
@@ -75,12 +75,17 @@ identical:
 
 | Current | Target direction |
 | ---: | ---: |
-| 184,320 bytes | toward one MCU/slice row class, around 61,440 bytes if feasible |
+| 184,320 bytes | implemented at 61,440 bytes for 1:1 4:2:0 |
 
 When the source JPEG is already `2560x1440` 4:2:0, bilinear scaling should be
 unnecessary for I420 output and partly avoidable for NV12 output. The pipeline
 should detect this case, skip fixed-point scaling where safe, and feed encoder
 slices from the smallest valid row-cache/staging window.
+
+The implemented 1:1 path keeps one MCU row per component. I420 output feeds the
+encoder directly from the row cache, while NV12 still stages only the 20,480-byte
+interleaved chroma window. The public slice-work capacity remains 61,440 bytes
+until issue #53 narrows the caller-facing work-buffer contract.
 
 Acceptance focus:
 

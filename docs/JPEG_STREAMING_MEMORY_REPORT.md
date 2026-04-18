@@ -13,7 +13,7 @@ from the earlier allocation report. The production measurements below are from
 | Source JPEG | Previous full component planes | Production arena work | Production peak allocation | Streaming row cache | Slice work buffer |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 1280x720 4:2:0 | 1,382,400 | 92,304 | 92,160 | 61,440 | 61,440 |
-| 2560x1440 4:2:0 | 5,529,600 | 245,904 | 245,760 | 184,320 | 61,440 |
+| 2560x1440 4:2:0, 1:1 fast path | 5,529,600 | 123,024 | 122,880 | 61,440 | 61,440 API capacity |
 
 `Production peak allocation` now excludes the previous dynamic NanoJPEG VLC
 lookup block. NanoJPEG decodes DHT tables into compact canonical Huffman
@@ -28,17 +28,27 @@ Regression tools read tracked allocation stats through
 and streaming-prototype comparison entry points are private test hooks gated by
 `SH264E_ENABLE_JPEG_TEST_HOOKS`, not production application APIs.
 
-For the `2560x1440` 4:2:0 row, the measured peak breaks down as:
+For the `2560x1440` 4:2:0 1:1 row, the measured peak breaks down as:
 
 | Block | Bytes |
 | --- | ---: |
-| Streaming retained row cache | 184,320 |
+| Streaming retained row cache | 61,440 |
 | NanoJPEG MCU-row temp buffers | 61,440 |
-| Total tracked peak allocation | 245,760 |
+| Total tracked peak allocation | 122,880 |
 
 Issue #31 reduced production peak allocation below the 270 KiB target without
-increasing the 184,320-byte row cache or regressing to full component-plane
-decode. Custom DHT baseline JPEGs remain supported.
+regressing to full component-plane decode. Issue #49 then added the 1:1
+`2560x1440` 4:2:0 fast path, reducing that row cache to one MCU/slice row.
+Custom DHT baseline JPEGs remain supported.
+
+For the 1:1 fast path, the public API still accepts the conservative
+61,440-byte slice work buffer returned by `sh264e_jpeg_get_slice_buffer_size`.
+The effective slice staging used by the implementation is lower:
+
+| Output format | Effective slice work bytes | Notes |
+| --- | ---: | --- |
+| I420 | 0 | Encoder slice planes point directly into the retained MCU-row cache |
+| NV12 | 20,480 | Luma points into the cache; chroma is interleaved into an 8-row UV staging window |
 
 ## Output Buffer Boundary
 
@@ -70,15 +80,15 @@ For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
 
 | Block | Bytes |
 | --- | ---: |
-| JPEG work arena | 245,904 |
+| JPEG work arena | 123,024 |
 | JPEG/scaler slice work | 61,440 |
 | Reusable H.264 output chunk buffer | 4,096 |
 | Encoder heap | 191,048 |
 | Static mutable RAM | about 4,529 |
-| Rounded planning budget | about 510 KiB |
+| Rounded planning budget | about 390 KiB |
 
-The arithmetic subtotal of the rows above is about 507,017 bytes, or about
-495 KiB in binary units. The rounded planning budget is now about 510 KiB for
+The arithmetic subtotal of the rows above is about 384,113 bytes, or about
+375 KiB in binary units. The rounded planning budget is now about 390 KiB for
 this embedded path.
 
 The encoder heap row is measured by `sh264e_encoder_get_memory_report`; see
@@ -88,8 +98,9 @@ reconstructed-slice, and neighbor-state breakdown.
 ## Regression Coverage
 
 `tests/run_ffmpeg_integration.py` asserts the exact production arena work,
-peak-allocation, row-cache, reusable output chunk, encoder memory report, and
-one-shot output capacity values for representative JPEG fixtures. It also keeps broader
+peak-allocation, row-cache, effective slice work, reusable output chunk, encoder
+memory report, and one-shot output capacity values for representative JPEG
+fixtures. It also keeps broader
 color-subsampling coverage that fails if the production arena path regresses to
 full component-plane allocation or if the default JPEG tool path regresses to
 allocating `sh264e_get_max_output_size()` for H.264 output.
@@ -133,6 +144,7 @@ jpeg output consumer chunks: 92
 jpeg output chunk buffer bytes: 4096
 jpeg work arena bytes: 92304
 jpeg slice work bytes: 61440
+jpeg effective slice work bytes: 61440
 jpeg peak allocation bytes: 92160
 jpeg streaming cache bytes: 61440
 jpeg output buffer bytes: 4096
@@ -140,10 +152,11 @@ jpeg output buffer bytes: 4096
 2560x1440:
 jpeg output consumer chunks: 92
 jpeg output chunk buffer bytes: 4096
-jpeg work arena bytes: 245904
+jpeg work arena bytes: 123024
 jpeg slice work bytes: 61440
-jpeg peak allocation bytes: 245760
-jpeg streaming cache bytes: 184320
+jpeg effective slice work bytes: 0
+jpeg peak allocation bytes: 122880
+jpeg streaming cache bytes: 61440
 jpeg output buffer bytes: 4096
 ```
 

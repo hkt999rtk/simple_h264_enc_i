@@ -296,7 +296,7 @@ Approximate component-cache targets from the design note:
 | 1280x720 4:2:0 | 1,382,400 | 61,440 |
 | 1280x720 4:2:2 | 1,843,200 | 81,920 |
 | 1280x720 4:4:4 | 2,764,800 | 122,880 |
-| 2560x1440 4:2:0 | 5,529,600 | 184,320 |
+| 2560x1440 4:2:0, 1:1 fast path | 5,529,600 | 61,440 |
 | 5120x2880 4:2:0 | not yet measured | 491,520 |
 | 5120x2880 4:4:4 | not yet measured | 819,200 |
 
@@ -312,7 +312,7 @@ path no longer requires the previous full decoded component planes:
 | Source JPEG | Previous full component planes | Production arena work | Production peak allocation | Streaming row cache |
 | --- | ---: | ---: | ---: | ---: |
 | 1280x720 4:2:0 | 1,382,400 | 92,304 | 92,160 | 61,440 |
-| 2560x1440 4:2:0 | 5,529,600 | 245,904 | 245,760 | 184,320 |
+| 2560x1440 4:2:0, 1:1 fast path | 5,529,600 | 123,024 | 122,880 | 61,440 |
 
 The production peak no longer includes the previous 524,288-byte NanoJPEG VLC
 lookup block. NanoJPEG stores compact canonical Huffman metadata in its decoder
@@ -323,12 +323,13 @@ Current `2560x1440` 4:2:0 production peak allocation breaks down as:
 
 | Block | Bytes |
 | --- | ---: |
-| Streaming retained row cache | 184,320 |
+| Streaming retained row cache | 61,440 |
 | NanoJPEG MCU-row temp buffers | 61,440 |
-| Total tracked peak allocation | 245,760 |
+| Total tracked peak allocation | 122,880 |
 
-Issue #31 reduced the `2560x1440` 4:2:0 production peak below the 270 KiB target
-without increasing the 184,320-byte row cache or regressing to full
+Issue #31 reduced the `2560x1440` 4:2:0 production peak below the 270 KiB
+target. Issue #49 added the source-equals-destination 4:2:0 fast path and
+reduced the 2560x1440 row cache to one MCU/slice row without regressing to full
 component-plane decode.
 
 The next reduced embedded RAM risk after JPEG decode memory was the one-shot

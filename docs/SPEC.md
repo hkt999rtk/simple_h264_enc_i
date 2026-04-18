@@ -329,6 +329,7 @@ sh264e_encode_jpeg_idr_with_arena
 sh264e_encode_jpeg_idr_with_arena_stream
 sh264e_jpeg_get_last_allocation_stats
 sh264e_jpeg_get_last_streaming_cache_bytes
+sh264e_jpeg_get_last_slice_work_bytes
 sh264e_encoder_get_memory_report
 ```
 
@@ -366,8 +367,9 @@ may implement a consumer that writes to a file.
 `sh264e_jpeg_get_last_allocation_stats` reports the current and peak tracked
 JPEG allocations from the last JPEG work-size query or encode call.
 `sh264e_jpeg_get_last_streaming_cache_bytes` reports the decoded row-cache
-capacity retained by the last MCU-row streaming query or encode call. These are
-diagnostic/stat APIs for regression reporting; allocation-limit and
+capacity retained by the last MCU-row streaming query or encode call.
+`sh264e_jpeg_get_last_slice_work_bytes` reports the effective slice staging used
+by the last JPEG encode. These are diagnostic/stat APIs for regression reporting; allocation-limit and
 streaming-prototype hooks remain private test hooks gated by
 `SH264E_ENABLE_JPEG_TEST_HOOKS`.
 `sh264e_encoder_get_memory_report` reports fixed-v1 encoder-owned memory
@@ -377,6 +379,11 @@ reconstructed luma slice storage, 20,480 bytes of reconstructed chroma slice
 storage, and 2,560 bytes of neighbor/nonzero state.
 
 NanoJPEG decodes baseline JPEG through MCU-row streaming. The library scales decoded component rows directly into one YUV420 encoder slice at a time:
+
+For `2560x1440` 4:2:0 source JPEGs encoded to the fixed target, the JPEG path
+uses a 1:1 fast path. It skips bilinear scaling, keeps one MCU row per
+component, feeds I420 slices directly from the retained rows, and stages only
+the 20,480-byte interleaved UV window needed for NV12.
 
 * I420 encoder config: Y, U, and V slice planes
 * NV12 encoder config: Y and interleaved UV slice planes
