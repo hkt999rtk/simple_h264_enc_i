@@ -161,9 +161,12 @@ int main(void)
     size_t slice_capacity = 0;
     size_t output_size = 0;
     size_t jpeg_work_size = 0;
+    size_t encoder_work_size = 0;
     uint8_t *slice_output = NULL;
     uint8_t *small_input = NULL;
     uint8_t *resize_work = NULL;
+    uint8_t *encoder_arena_alloc = NULL;
+    sh264e_encoder_t *arena_encoder = NULL;
     sh264e_jpeg_allocation_stats_t jpeg_alloc_stats;
     sh264e_encoder_memory_report_t encoder_memory_report;
     int ok = 1;
@@ -207,6 +210,15 @@ int main(void)
     ok &= expect_status("encoder memory report",
                         sh264e_encoder_get_memory_report(&config, &encoder_memory_report),
                         SH264E_OK);
+    ok &= expect_status("null encoder work-size config",
+                        sh264e_encoder_get_work_size(NULL, &encoder_work_size),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("null encoder work-size output",
+                        sh264e_encoder_get_work_size(&config, NULL),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("encoder work size",
+                        sh264e_encoder_get_work_size(&config, &encoder_work_size),
+                        SH264E_OK);
     if (output_capacity == 0u) {
         fprintf(stderr, "max output size returned zero\n");
         ok = 0;
@@ -241,6 +253,18 @@ int main(void)
         fprintf(stderr, "encoder memory total does not match sub-block sum\n");
         ok = 0;
     }
+    if (encoder_work_size != encoder_memory_report.total_bytes + sizeof(void *) - 1u) {
+        fprintf(stderr, "unexpected encoder arena work size: %zu\n", encoder_work_size);
+        ok = 0;
+    }
+    ok &= expect_status("null encoder arena",
+                        sh264e_encoder_create_with_arena(&config, NULL,
+                                                         encoder_work_size, &arena_encoder),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("null encoder arena output",
+                        sh264e_encoder_create_with_arena(&config, input,
+                                                         encoder_work_size, NULL),
+                        SH264E_ERR_INVALID_ARGUMENT);
     ok &= expect_status("null JPEG allocation stats",
                         sh264e_jpeg_get_last_allocation_stats(NULL),
                         SH264E_ERR_INVALID_ARGUMENT);
@@ -394,6 +418,36 @@ int main(void)
     frame.stride[1] = SH264E_V1_WIDTH / 2u;
     frame.stride[2] = SH264E_V1_WIDTH / 2u;
 
+    encoder_arena_alloc = (uint8_t *)malloc(encoder_work_size + 1u);
+    if (encoder_arena_alloc == NULL) {
+        fprintf(stderr, "encoder arena allocation failed\n");
+        ok = 0;
+    } else {
+        ok &= expect_status("encoder arena too small",
+                            sh264e_encoder_create_with_arena(&config,
+                                                             encoder_arena_alloc + 1u,
+                                                             encoder_work_size - 1u,
+                                                             &arena_encoder),
+                            SH264E_ERR_BUFFER_TOO_SMALL);
+        ok &= expect_status("create arena encoder",
+                            sh264e_encoder_create_with_arena(&config,
+                                                             encoder_arena_alloc + 1u,
+                                                             encoder_work_size,
+                                                             &arena_encoder),
+                            SH264E_OK);
+        if (arena_encoder != NULL) {
+            output_size = 0u;
+            status = sh264e_encode_idr(arena_encoder, &frame, output, output_capacity, &output_size);
+            ok &= expect_status("arena encode idr", status, SH264E_OK);
+            if (status == SH264E_OK && !expect_wrapper_nal_sequence(output, output_size)) {
+                ok = 0;
+            }
+            sh264e_encoder_destroy(arena_encoder);
+            arena_encoder = NULL;
+            encoder_arena_alloc[0] = 0xa5u;
+        }
+    }
+
     ok &= expect_status("small output buffer",
                         sh264e_encode_idr(encoder, &frame, output, 8u, &output_size),
                         SH264E_ERR_BUFFER_TOO_SMALL);
@@ -455,11 +509,13 @@ int main(void)
                             SH264E_ERR_BAD_STATE);
     }
 
+    sh264e_encoder_destroy(arena_encoder);
     sh264e_encoder_destroy(encoder);
     free(input);
     free(output);
     free(slice_output);
     free(resize_work);
     free(small_input);
+    free(encoder_arena_alloc);
     return ok ? 0 : 1;
 }

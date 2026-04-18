@@ -28,6 +28,9 @@
 #define SH264E_SCALE_FP_ONE (1u << SH264E_SCALE_FP_BITS)
 #define SH264E_SCALE_FP_HALF (SH264E_SCALE_FP_ONE >> 1u)
 #define SH264E_SCALE_FP_BLEND_ROUND ((uint64_t)1u << ((SH264E_SCALE_FP_BITS * 2u) - 1u))
+#define SH264E_ENCODER_FLAG_IDR_ACTIVE 1u
+#define SH264E_ENCODER_FLAG_OWNS_MEMORY 2u
+#define SH264E_ENCODER_ARENA_ALIGNMENT ((size_t)sizeof(void *))
 
 #if !defined(SH264E_DISABLE_ARM_DSP) && defined(__ARM_FEATURE_DSP) && defined(__GNUC__)
 #define SH264E_USE_ARM_DSP 1
@@ -58,7 +61,7 @@ struct sh264e_encoder_t {
     uint8_t *recon_u;
     uint8_t *recon_v;
     uint8_t *nz_luma;
-    unsigned idr_active;
+    unsigned flags;
     unsigned slices_encoded;
 };
 
@@ -391,6 +394,20 @@ static sh264e_status_t validate_config(const sh264e_config_t *config)
         return SH264E_ERR_UNSUPPORTED_CONFIG;
     }
     return SH264E_OK;
+}
+
+static int encoder_idr_active(const sh264e_encoder_t *encoder)
+{
+    return (encoder->flags & SH264E_ENCODER_FLAG_IDR_ACTIVE) != 0u;
+}
+
+static void encoder_set_idr_active(sh264e_encoder_t *encoder, int active)
+{
+    if (active) {
+        encoder->flags |= SH264E_ENCODER_FLAG_IDR_ACTIVE;
+    } else {
+        encoder->flags &= ~SH264E_ENCODER_FLAG_IDR_ACTIVE;
+    }
 }
 
 static int is_supported_pixfmt(sh264e_pixfmt_t pixfmt)
@@ -2481,7 +2498,7 @@ static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *e
     *out_size = 0u;
     sh264e_jpeg_streaming_last_cache_bytes = 0u;
     sh264e_jpeg_streaming_last_slice_work_bytes = 0u;
-    if (encoder->idr_active != 0u) {
+    if (encoder_idr_active(encoder)) {
         return SH264E_ERR_BAD_STATE;
     }
     if (jpeg_size == 0u || jpeg_size > (size_t)INT_MAX) {
@@ -2572,22 +2589,17 @@ sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype_with_arena(sh264e_enc
 
 #endif
 
-sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,
-                                      sh264e_encoder_t **out_encoder)
+static sh264e_status_t normalize_encoder_config(const sh264e_config_t *config,
+                                                sh264e_config_t *out_normalized,
+                                                size_t *out_max_slice_output_size)
 {
     sh264e_status_t status;
-    sh264e_encoder_t *encoder;
-    size_t max_slice_output_size = 0;
     sh264e_config_t normalized;
+    size_t max_slice_output_size = 0u;
 
-    if (out_encoder == NULL) {
+    if (config == NULL || out_normalized == NULL || out_max_slice_output_size == NULL) {
         return SH264E_ERR_INVALID_ARGUMENT;
     }
-    *out_encoder = NULL;
-    if (config == NULL) {
-        return SH264E_ERR_INVALID_ARGUMENT;
-    }
-
     normalized = *config;
     if (normalized.qp == 0) {
         normalized.qp = SH264E_DEFAULT_QP;
@@ -2602,11 +2614,63 @@ sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,
         return status;
     }
 
+    *out_normalized = normalized;
+    *out_max_slice_output_size = max_slice_output_size;
+    return SH264E_OK;
+}
+
+static int checked_add_size(size_t a, size_t b, size_t *out)
+{
+    if (a > (size_t)-1 - b) {
+        return 0;
+    }
+    *out = a + b;
+    return 1;
+}
+
+static sh264e_status_t encoder_arena_work_size(size_t max_slice_output_size, size_t *out_size)
+{
+    size_t total = 0u;
+
+    if (!checked_add_size(total, sizeof(sh264e_encoder_t), &total) ||
+        !checked_add_size(total, max_slice_output_size, &total) ||
+        !checked_add_size(total, encoder_recon_luma_bytes(), &total) ||
+        !checked_add_size(total, encoder_recon_chroma_bytes(), &total) ||
+        !checked_add_size(total, encoder_neighbor_state_bytes(), &total) ||
+        !checked_add_size(total, SH264E_ENCODER_ARENA_ALIGNMENT - 1u, &total)) {
+        return SH264E_ERR_UNSUPPORTED_CONFIG;
+    }
+    *out_size = total;
+    return SH264E_OK;
+}
+
+sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,
+                                      sh264e_encoder_t **out_encoder)
+{
+    sh264e_status_t status;
+    sh264e_encoder_t *encoder;
+    size_t max_slice_output_size = 0u;
+    sh264e_config_t normalized;
+
+    if (out_encoder == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    *out_encoder = NULL;
+    if (config == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+
+    status = normalize_encoder_config(config, &normalized, &max_slice_output_size);
+    if (status != SH264E_OK) {
+        return status;
+    }
+
     encoder = (sh264e_encoder_t *)calloc(1u, sizeof(*encoder));
     if (encoder == NULL) {
         return SH264E_ERR_ALLOCATION_FAILED;
     }
     encoder->config = normalized;
+    encoder->flags = SH264E_ENCODER_FLAG_OWNS_MEMORY;
     encoder->rbsp_capacity = max_slice_output_size;
     encoder->rbsp = (uint8_t *)malloc(encoder->rbsp_capacity);
     encoder->recon_y = (uint8_t *)malloc(encoder_recon_luma_bytes());
@@ -2624,17 +2688,137 @@ sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,
     return SH264E_OK;
 }
 
+sh264e_status_t sh264e_encoder_get_work_size(const sh264e_config_t *config,
+                                             size_t *out_size)
+{
+    sh264e_status_t status;
+    size_t max_slice_output_size = 0u;
+    sh264e_config_t normalized;
+
+    if (out_size == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    *out_size = 0u;
+    status = normalize_encoder_config(config, &normalized, &max_slice_output_size);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    return encoder_arena_work_size(max_slice_output_size, out_size);
+}
+
+static sh264e_status_t encoder_arena_take(uint8_t **cursor,
+                                          uintptr_t end,
+                                          size_t size,
+                                          uint8_t **out)
+{
+    const uintptr_t current = (uintptr_t)*cursor;
+
+    if (current > end || size > end - current) {
+        return SH264E_ERR_BUFFER_TOO_SMALL;
+    }
+    *out = *cursor;
+    memset(*out, 0, size);
+    *cursor += size;
+    return SH264E_OK;
+}
+
+sh264e_status_t sh264e_encoder_create_with_arena(const sh264e_config_t *config,
+                                                 void *arena,
+                                                 size_t arena_size,
+                                                 sh264e_encoder_t **out_encoder)
+{
+    sh264e_status_t status;
+    sh264e_config_t normalized;
+    sh264e_encoder_t *encoder;
+    size_t max_slice_output_size = 0u;
+    size_t required_size = 0u;
+    uintptr_t start;
+    uintptr_t aligned;
+    uintptr_t end;
+    size_t remainder;
+    uint8_t *cursor;
+    uint8_t *block;
+
+    if (out_encoder == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    *out_encoder = NULL;
+    if (config == NULL || arena == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+
+    status = normalize_encoder_config(config, &normalized, &max_slice_output_size);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    status = encoder_arena_work_size(max_slice_output_size, &required_size);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    if (arena_size < required_size) {
+        return SH264E_ERR_BUFFER_TOO_SMALL;
+    }
+
+    start = (uintptr_t)arena;
+    if (arena_size > UINTPTR_MAX - start) {
+        return SH264E_ERR_BUFFER_TOO_SMALL;
+    }
+    end = start + arena_size;
+    remainder = start % SH264E_ENCODER_ARENA_ALIGNMENT;
+    aligned = remainder == 0u ? start : start + (SH264E_ENCODER_ARENA_ALIGNMENT - remainder);
+    if (aligned < start || sizeof(*encoder) > end - aligned) {
+        return SH264E_ERR_BUFFER_TOO_SMALL;
+    }
+
+    encoder = (sh264e_encoder_t *)aligned;
+    memset(encoder, 0, sizeof(*encoder));
+    cursor = (uint8_t *)encoder + sizeof(*encoder);
+
+    status = encoder_arena_take(&cursor, end, max_slice_output_size, &block);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    encoder->rbsp = block;
+    status = encoder_arena_take(&cursor, end, encoder_recon_luma_bytes(), &block);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    encoder->recon_y = block;
+    status = encoder_arena_take(&cursor, end, encoder_recon_chroma_plane_bytes(), &block);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    encoder->recon_u = block;
+    status = encoder_arena_take(&cursor, end, encoder_recon_chroma_plane_bytes(), &block);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    encoder->recon_v = block;
+    status = encoder_arena_take(&cursor, end, encoder_neighbor_state_bytes(), &block);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    encoder->nz_luma = block;
+
+    encoder->config = normalized;
+    encoder->rbsp_capacity = max_slice_output_size;
+    *out_encoder = encoder;
+    return SH264E_OK;
+}
+
 void sh264e_encoder_destroy(sh264e_encoder_t *encoder)
 {
     if (encoder == NULL) {
         return;
     }
-    free(encoder->rbsp);
-    free(encoder->recon_y);
-    free(encoder->recon_u);
-    free(encoder->recon_v);
-    free(encoder->nz_luma);
-    free(encoder);
+    if ((encoder->flags & SH264E_ENCODER_FLAG_OWNS_MEMORY) != 0u) {
+        free(encoder->rbsp);
+        free(encoder->recon_y);
+        free(encoder->recon_u);
+        free(encoder->recon_v);
+        free(encoder->nz_luma);
+        free(encoder);
+    }
 }
 
 sh264e_status_t sh264e_get_max_header_output_size(const sh264e_config_t *config, size_t *out_size)
@@ -2751,7 +2935,7 @@ sh264e_status_t sh264e_begin_idr(sh264e_encoder_t *encoder,
         return SH264E_ERR_INVALID_ARGUMENT;
     }
     *out_size = 0;
-    if (encoder->idr_active != 0u) {
+    if (encoder_idr_active(encoder)) {
         return SH264E_ERR_BAD_STATE;
     }
     if (out_capacity == 0u) {
@@ -2767,7 +2951,7 @@ sh264e_status_t sh264e_begin_idr(sh264e_encoder_t *encoder,
         return status;
     }
 
-    encoder->idr_active = 1u;
+    encoder_set_idr_active(encoder, 1);
     encoder->slices_encoded = 0u;
     *out_size = offset;
     return SH264E_OK;
@@ -2786,7 +2970,7 @@ sh264e_status_t sh264e_encode_idr_slice(sh264e_encoder_t *encoder,
         return SH264E_ERR_INVALID_ARGUMENT;
     }
     *out_size = 0;
-    if (encoder->idr_active == 0u) {
+    if (!encoder_idr_active(encoder)) {
         return SH264E_ERR_BAD_STATE;
     }
     if (encoder->slices_encoded >= SH264E_MBS_Y) {
@@ -2825,7 +3009,7 @@ static sh264e_status_t sh264e_begin_idr_to_consumer(sh264e_encoder_t *encoder,
         return SH264E_ERR_INVALID_ARGUMENT;
     }
     *out_size = 0u;
-    if (encoder->idr_active != 0u) {
+    if (encoder_idr_active(encoder)) {
         return SH264E_ERR_BAD_STATE;
     }
     if (chunk_capacity == 0u) {
@@ -2856,7 +3040,7 @@ static sh264e_status_t sh264e_begin_idr_to_consumer(sh264e_encoder_t *encoder,
     }
     total += bytes;
 
-    encoder->idr_active = 1u;
+    encoder_set_idr_active(encoder, 1);
     encoder->slices_encoded = 0u;
     *out_size = total;
     return SH264E_OK;
@@ -2878,7 +3062,7 @@ static sh264e_status_t sh264e_encode_idr_slice_to_consumer(sh264e_encoder_t *enc
         return SH264E_ERR_INVALID_ARGUMENT;
     }
     *out_size = 0u;
-    if (encoder->idr_active == 0u) {
+    if (!encoder_idr_active(encoder)) {
         return SH264E_ERR_BAD_STATE;
     }
     if (encoder->slices_encoded >= SH264E_MBS_Y) {
@@ -2912,13 +3096,13 @@ sh264e_status_t sh264e_end_idr(sh264e_encoder_t *encoder)
     if (encoder == NULL) {
         return SH264E_ERR_INVALID_ARGUMENT;
     }
-    if (encoder->idr_active == 0u) {
+    if (!encoder_idr_active(encoder)) {
         return SH264E_ERR_BAD_STATE;
     }
     if (encoder->slices_encoded != SH264E_MBS_Y) {
         return SH264E_ERR_INCOMPLETE_FRAME;
     }
-    encoder->idr_active = 0u;
+    encoder_set_idr_active(encoder, 0);
     encoder->slices_encoded = 0u;
     return SH264E_OK;
 }
@@ -2947,7 +3131,7 @@ static void make_slice_from_frame(const sh264e_frame_t *frame, unsigned slice_in
 static void reset_progressive_state(sh264e_encoder_t *encoder)
 {
     if (encoder != NULL) {
-        encoder->idr_active = 0u;
+        encoder_set_idr_active(encoder, 0);
         encoder->slices_encoded = 0u;
     }
 }
@@ -2967,7 +3151,7 @@ sh264e_status_t sh264e_encode_idr(sh264e_encoder_t *encoder,
         return SH264E_ERR_INVALID_ARGUMENT;
     }
     *out_size = 0;
-    if (encoder->idr_active != 0u) {
+    if (encoder_idr_active(encoder)) {
         return SH264E_ERR_BAD_STATE;
     }
     status = validate_frame(&encoder->config, frame);

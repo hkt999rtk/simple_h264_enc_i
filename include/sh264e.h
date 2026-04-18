@@ -81,6 +81,14 @@ typedef sh264e_status_t (*sh264e_output_consumer_t)(void *user,
 sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,
                                       sh264e_encoder_t **out_encoder);
 
+sh264e_status_t sh264e_encoder_get_work_size(const sh264e_config_t *config,
+                                             size_t *out_size);
+
+sh264e_status_t sh264e_encoder_create_with_arena(const sh264e_config_t *config,
+                                                 void *arena,
+                                                 size_t arena_size,
+                                                 sh264e_encoder_t **out_encoder);
+
 void sh264e_encoder_destroy(sh264e_encoder_t *encoder);
 
 sh264e_status_t sh264e_get_max_header_output_size(const sh264e_config_t *config,

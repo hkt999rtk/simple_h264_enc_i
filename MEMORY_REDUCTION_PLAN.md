@@ -272,7 +272,7 @@ Memory target for `2560x1440` JPEG 4:2:0 embedded path:
 | JPEG work arena | 123,024 |
 | JPEG/scaler slice work | 0 for I420, 20,480 for NV12 |
 | Reusable H.264 output chunk buffer | 4,096 |
-| Encoder heap | 191,048 |
+| Encoder arena | 191,055 |
 | Static mutable RAM | about 4,529 |
 | Total, excluding compressed JPEG input and `.rodata` | about 330 KiB I420 / 350 KiB NV12 budget class |
 

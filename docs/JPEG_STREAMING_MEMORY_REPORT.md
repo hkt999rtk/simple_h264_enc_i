@@ -85,18 +85,18 @@ For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
 | JPEG work arena | 123,024 |
 | JPEG/scaler slice work | 0 for I420, 20,480 for NV12 |
 | Reusable H.264 output chunk buffer | 4,096 |
-| Encoder heap | 191,048 |
+| Encoder arena | 191,055 |
 | Static mutable RAM | about 4,529 |
 | Rounded planning budget | about 330 KiB I420 / 350 KiB NV12 |
 
-The I420 arithmetic subtotal of the rows above is about 322,697 bytes, or about
-315 KiB in binary units. The equivalent NV12 subtotal is about 343,177 bytes,
+The I420 arithmetic subtotal of the rows above is about 322,704 bytes, or about
+315 KiB in binary units. The equivalent NV12 subtotal is about 343,184 bytes,
 or about 335 KiB. The rounded planning budget is now about 330 KiB for I420 and
 about 350 KiB for NV12 on this embedded path.
 
-The encoder heap row is measured by `sh264e_encoder_get_memory_report`; see
-`docs/ENCODER_MEMORY_REPORT.md` for the context, bitstream scratch,
-reconstructed-slice, and neighbor-state breakdown.
+The encoder arena row is reported by `sh264e_encoder_get_work_size`; see
+`docs/ENCODER_MEMORY_REPORT.md` for the raw context, bitstream scratch,
+reconstructed-slice, neighbor-state breakdown, and arena alignment padding.
 
 ## Regression Coverage
 

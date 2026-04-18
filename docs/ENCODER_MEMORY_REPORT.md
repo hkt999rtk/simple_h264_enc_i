@@ -16,6 +16,7 @@ instance reports:
 | Reconstructed chroma slices | 20,480 | U and V, each `1280 * 8` |
 | Neighbor/nonzero state | 2,560 | 4x4 luma nonzero state for one slice |
 | Total encoder memory | 191,048 | Sum of the rows above |
+| Caller-provided encoder arena | 191,055 | Total plus worst-case control-structure alignment padding |
 
 The previously documented `about 191,024` byte budget was an estimate. The
 measured current 64-bit host total is `191,048` bytes.
@@ -36,10 +37,17 @@ This report is only encoder-owned memory. It excludes:
 validates the supplied encoder config and returns the sub-block sizes above
 without creating an encoder.
 
+`sh264e_encoder_get_work_size` reports the caller arena size needed by
+`sh264e_encoder_create_with_arena`. The arena-backed creation path accepts
+misaligned caller memory by aligning the opaque encoder control structure inside
+the supplied block, then carving the byte-addressed encoder work buffers after
+it. `sh264e_encoder_destroy` resets no caller memory and does not free the arena.
+
 The JPEG tool prints the same report:
 
 ```text
 encoder memory total bytes: 191048
+encoder arena work bytes: 191055
 encoder context bytes: 72
 encoder bitstream scratch bytes: 126976
 encoder recon luma bytes: 40960

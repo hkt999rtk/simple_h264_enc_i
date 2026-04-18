@@ -47,6 +47,7 @@ ENCODER_RECON_LUMA_BYTES = 40_960
 ENCODER_RECON_CHROMA_BYTES = 20_480
 ENCODER_NEIGHBOR_STATE_BYTES = 2_560
 ENCODER_MEMORY_TOTAL_BYTES = 191_048
+ENCODER_ARENA_WORK_BYTES = 191_055
 EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420 = (
     PRODUCTION_MEMORY_1440P_420["work"]
     + JPEG_DIRECT_I420_SLICE_WORK_BYTES
@@ -335,6 +336,11 @@ def validate_encoder_memory_report(stdout):
     )
     if report["total"] != subtotal:
         raise RuntimeError(f"encoder memory total {report['total']} != sub-block sum {subtotal}")
+    arena_work = parse_jpeg_metric(stdout, "encoder arena work bytes:")
+    if arena_work != ENCODER_ARENA_WORK_BYTES:
+        raise RuntimeError(
+            f"encoder arena work size changed: got {arena_work}, expected {ENCODER_ARENA_WORK_BYTES}"
+        )
 
 
 def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
