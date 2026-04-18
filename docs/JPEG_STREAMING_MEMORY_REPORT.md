@@ -71,16 +71,12 @@ Expected metric lines:
 
 ```text
 1280x720:
-jpeg work arena bytes: 616616
-jpeg peak allocation bytes: 616448
+jpeg work arena bytes: 92304
+jpeg peak allocation bytes: 92160
 jpeg streaming cache bytes: 61440
 
 2560x1440:
-jpeg work arena bytes: 770216
-jpeg peak allocation bytes: 770048
+jpeg work arena bytes: 245904
+jpeg peak allocation bytes: 245760
 jpeg streaming cache bytes: 184320
 ```
-
-After issue #31 lands, these expected peak/work values should be updated while
-keeping the row-cache value stable unless the row-cache algorithm is
-intentionally changed and remeasured.
