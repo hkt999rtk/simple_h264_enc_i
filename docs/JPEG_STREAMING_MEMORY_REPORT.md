@@ -12,30 +12,27 @@ from the earlier allocation report. The production measurements below are from
 
 | Source JPEG | Previous full component planes | Production arena work | Production peak allocation | Streaming row cache | Slice work buffer |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 1280x720 4:2:0 | 1,382,400 | 616,616 | 616,448 | 61,440 | 61,440 |
-| 2560x1440 4:2:0 | 5,529,600 | 770,216 | 770,048 | 184,320 | 61,440 |
+| 1280x720 4:2:0 | 1,382,400 | 92,304 | 92,160 | 61,440 | 61,440 |
+| 2560x1440 4:2:0 | 5,529,600 | 245,904 | 245,760 | 184,320 | 61,440 |
 
-`Production peak allocation` includes the dynamic NanoJPEG VLC table block
-introduced by the static-BSS reduction work. That block is tracked through the
-same JPEG allocation shim as the row cache so embedded integrations can place it
-in the caller-provided arena. The streaming row cache is the decoded-image
-replacement for the previous full component planes.
+`Production peak allocation` now excludes the previous dynamic NanoJPEG VLC
+lookup block. NanoJPEG decodes DHT tables into compact canonical Huffman
+metadata in the decoder context, uses a small `NJ_VLC_FAST_BITS` fast table for
+short codes, and falls back to canonical range lookup for longer codes. The
+streaming row cache is the decoded-image replacement for the previous full
+component planes.
 
 For the `2560x1440` 4:2:0 row, the measured peak breaks down as:
 
 | Block | Bytes |
 | --- | ---: |
-| Dynamic NanoJPEG VLC tables | 524,288 |
 | Streaming retained row cache | 184,320 |
 | NanoJPEG MCU-row temp buffers | 61,440 |
-| Total tracked peak allocation | 770,048 |
+| Total tracked peak allocation | 245,760 |
 
-The row cache target has been met. The next memory bottleneck is the dynamic
-VLC table block. Issue #31 tracks replacing the 16-bit SRAM VLC lookup tables
-with compact Huffman decode and, where appropriate, an XIP-friendly standard
-Huffman fast path. The target for `2560x1440` 4:2:0 is to reduce production peak
-allocation below 270 KiB without increasing the 184,320-byte row cache or
-regressing to full component-plane decode.
+Issue #31 reduced production peak allocation below the 270 KiB target without
+increasing the 184,320-byte row cache or regressing to full component-plane
+decode. Custom DHT baseline JPEGs remain supported.
 
 ## Regression Coverage
 

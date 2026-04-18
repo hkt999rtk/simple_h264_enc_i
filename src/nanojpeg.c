@@ -84,11 +84,9 @@
 //                           (default).
 // NJ_CHROMA_FILTER=0      = Use simple pixel repetition for chroma upsampling
 //                           (bad quality, but faster and less code).
-// NJ_DYNAMIC_VLC=1        = Allocate Huffman/VLC decode tables at decode time
-//                           through njAllocMem() instead of keeping them in
-//                           NanoJPEG's static context (default).
-// NJ_DYNAMIC_VLC=0        = Keep VLC tables in static BSS for the original
-//                           NanoJPEG speed/static-allocation tradeoff.
+// NJ_VLC_FAST_BITS=8      = Use a small per-Huffman-table fast decode table
+//                           for codes up to this bit length, with canonical
+//                           Huffman fallback for longer codes (default).
 
 
 // API
@@ -218,8 +216,12 @@ void njDone(void);
     #define NJ_CHROMA_FILTER 1
 #endif
 
-#ifndef NJ_DYNAMIC_VLC
-    #define NJ_DYNAMIC_VLC 1
+#ifndef NJ_VLC_FAST_BITS
+    #define NJ_VLC_FAST_BITS 8
+#endif
+
+#if NJ_VLC_FAST_BITS > 10
+    #error "NJ_VLC_FAST_BITS is intentionally capped at 10 to avoid large SRAM tables"
 #endif
 
 
@@ -331,8 +333,15 @@ typedef struct _nj_code {
 } nj_vlc_code_t;
 
 #define NJ_VLC_TABLE_COUNT 4
-#define NJ_VLC_TABLE_SIZE 65536
-#define NJ_VLC_TABLE_BYTES (NJ_VLC_TABLE_COUNT * NJ_VLC_TABLE_SIZE * (int) sizeof(nj_vlc_code_t))
+#define NJ_VLC_FAST_SIZE (1 << NJ_VLC_FAST_BITS)
+
+typedef struct _nj_huff {
+    unsigned char symbols[256];
+    unsigned short first_symbol[17];
+    int mincode[17];
+    int maxcode[17];
+    nj_vlc_code_t fast[NJ_VLC_FAST_SIZE];
+} nj_huff_table_t;
 
 typedef struct _nj_cmp {
     int cid;
@@ -358,11 +367,7 @@ typedef struct _nj_ctx {
     int qtused, qtavail;
     unsigned char vlctab_avail;
     unsigned char qtab[4][64];
-#if NJ_DYNAMIC_VLC
-    nj_vlc_code_t (*vlctab)[NJ_VLC_TABLE_SIZE];
-#else
-    nj_vlc_code_t vlctab[NJ_VLC_TABLE_COUNT][NJ_VLC_TABLE_SIZE];
-#endif
+    nj_huff_table_t vlctab[NJ_VLC_TABLE_COUNT];
     int buf, bufbits;
     int block[64];
     int rstinterval;
@@ -488,28 +493,14 @@ NJ_INLINE void njColIDCT(const int* blk, unsigned char *out, int stride) {
 #define njThrow(e) do { nj.error = e; return; } while (0)
 #define njCheckError() do { if (nj.error) return; } while (0)
 
-#if NJ_DYNAMIC_VLC
-NJ_INLINE void njFreeVlcTables(void) {
-    if (nj.vlctab) {
-        njFreeMem((void*) nj.vlctab);
-        nj.vlctab = NULL;
-    }
-}
-
-NJ_INLINE int njEnsureVlcTables(void) {
-    if (!nj.vlctab) {
-        nj.vlctab = (nj_vlc_code_t (*)[NJ_VLC_TABLE_SIZE])
-            njAllocMem(NJ_VLC_TABLE_BYTES);
-        if (nj.vlctab) {
-            njFillMem((void*) nj.vlctab, 0, NJ_VLC_TABLE_BYTES);
-        }
-    }
-    return nj.vlctab != NULL;
-}
-#else
 NJ_INLINE void njFreeVlcTables(void) { }
-NJ_INLINE int njEnsureVlcTables(void) { return 1; }
-#endif
+
+NJ_INLINE void njResetHuffTable(nj_huff_table_t *tab) {
+    int i;
+    njFillMem(tab, 0, sizeof(*tab));
+    for (i = 0; i <= 16; ++i)
+        tab->maxcode[i] = -1;
+}
 
 static int njShowBits(int bits) {
     unsigned char newbyte;
@@ -643,12 +634,12 @@ NJ_INLINE void njDecodeSOF(void) {
 }
 
 NJ_INLINE void njDecodeDHT(void) {
-    int codelen, currcnt, remain, spread, table, i, j;
-    nj_vlc_code_t *vlc;
-    static unsigned char counts[16];
+    int codelen, currcnt, remain, table, i, j;
+    int code = 0, symbol_index = 0;
+    nj_huff_table_t *huff;
+    unsigned char counts[16];
     njDecodeLength();
     njCheckError();
-    if (!njEnsureVlcTables()) njThrow(NJ_OUT_OF_MEM);
     while (nj.length >= 17) {
         table = nj.pos[0];
         if (table & 0xEC) njThrow(NJ_SYNTAX_ERROR);
@@ -657,28 +648,40 @@ NJ_INLINE void njDecodeDHT(void) {
         for (codelen = 1;  codelen <= 16;  ++codelen)
             counts[codelen - 1] = nj.pos[codelen];
         njSkip(17);
-        vlc = &nj.vlctab[table][0];
-        remain = spread = 65536;
+        huff = &nj.vlctab[table];
+        njResetHuffTable(huff);
+        remain = 65536;
+        code = 0;
+        symbol_index = 0;
         for (codelen = 1;  codelen <= 16;  ++codelen) {
-            spread >>= 1;
             currcnt = counts[codelen - 1];
-            if (!currcnt) continue;
-            if (nj.length < currcnt) njThrow(NJ_SYNTAX_ERROR);
             remain -= currcnt << (16 - codelen);
             if (remain < 0) njThrow(NJ_SYNTAX_ERROR);
+            if (!currcnt) {
+                code <<= 1;
+                continue;
+            }
+            if (nj.length < currcnt) njThrow(NJ_SYNTAX_ERROR);
+            if (symbol_index > 256 - currcnt) njThrow(NJ_SYNTAX_ERROR);
+            huff->mincode[codelen] = code;
+            huff->maxcode[codelen] = code + currcnt - 1;
+            huff->first_symbol[codelen] = (unsigned short)symbol_index;
             for (i = 0;  i < currcnt;  ++i) {
-                register unsigned char code = nj.pos[i];
-                for (j = spread;  j;  --j) {
-                    vlc->bits = (unsigned char) codelen;
-                    vlc->code = code;
-                    ++vlc;
+                register unsigned char symbol = nj.pos[i];
+                const int huff_code = huff->mincode[codelen] + i;
+                huff->symbols[symbol_index + i] = symbol;
+                if (codelen <= NJ_VLC_FAST_BITS) {
+                    const int spread = 1 << (NJ_VLC_FAST_BITS - codelen);
+                    const int base = huff_code << (NJ_VLC_FAST_BITS - codelen);
+                    for (j = 0; j < spread; ++j) {
+                        huff->fast[base + j].bits = (unsigned char)codelen;
+                        huff->fast[base + j].code = symbol;
+                    }
                 }
             }
+            symbol_index += currcnt;
+            code = (code + currcnt) << 1;
             njSkip(currcnt);
-        }
-        while (remain--) {
-            vlc->bits = 0;
-            ++vlc;
         }
         nj.vlctab_avail |= (unsigned char)(1u << table);
     }
@@ -710,12 +713,32 @@ NJ_INLINE void njDecodeDRI(void) {
     njSkip(nj.length);
 }
 
-static int njGetVLC(nj_vlc_code_t* vlc, unsigned char* code) {
-    int value = njShowBits(16);
-    int bits = vlc[value].bits;
-    if (!bits) { nj.error = NJ_SYNTAX_ERROR; return 0; }
-    njSkipBits(bits);
-    value = vlc[value].code;
+static int njGetVLC(nj_huff_table_t* huff, unsigned char* code) {
+    int value;
+    int bits;
+    int codelen;
+
+    value = njShowBits(NJ_VLC_FAST_BITS);
+    bits = huff->fast[value].bits;
+    if (bits) {
+        njSkipBits(bits);
+        value = huff->fast[value].code;
+    } else {
+        const int raw = njShowBits(16);
+        for (codelen = NJ_VLC_FAST_BITS + 1; codelen <= 16; ++codelen) {
+            const int prefix = raw >> (16 - codelen);
+            if ((huff->maxcode[codelen] >= 0) && (prefix >= huff->mincode[codelen]) &&
+                (prefix <= huff->maxcode[codelen])) {
+                const int index = huff->first_symbol[codelen] + prefix - huff->mincode[codelen];
+                njSkipBits(codelen);
+                value = huff->symbols[index];
+                goto have_symbol;
+            }
+        }
+        nj.error = NJ_SYNTAX_ERROR;
+        return 0;
+    }
+have_symbol:
     if (code) *code = (unsigned char) value;
     bits = value & 15;
     if (!bits) return 0;
@@ -729,10 +752,10 @@ NJ_INLINE void njDecodeBlock(nj_component_t* c, unsigned char* out) {
     unsigned char code = 0;
     int value, coef = 0;
     njFillMem(nj.block, 0, sizeof(nj.block));
-    c->dcpred += njGetVLC(&nj.vlctab[c->dctabsel][0], NULL);
+    c->dcpred += njGetVLC(&nj.vlctab[c->dctabsel], NULL);
     nj.block[0] = (c->dcpred) * nj.qtab[c->qtsel][0];
     do {
-        value = njGetVLC(&nj.vlctab[c->actabsel][0], &code);
+        value = njGetVLC(&nj.vlctab[c->actabsel], &code);
         if (!code) break;  // EOB
         if (!(code & 0x0F) && (code != 0xF0)) njThrow(NJ_SYNTAX_ERROR);
         coef += (code >> 4) + 1;

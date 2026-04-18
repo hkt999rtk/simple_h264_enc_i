@@ -182,52 +182,50 @@ directions:
 * smaller generated-on-demand decode tables
 * build-time option to trade speed for SRAM
 
-Selected implementation direction:
+Interim implementation direction:
 
-* Default to arena-backed/dynamic VLC tables with `NJ_DYNAMIC_VLC=1`.
-* Keep `NJ_DYNAMIC_VLC=0` as a build-time escape hatch for projects that prefer
+* Defaulted to arena-backed/dynamic VLC tables with `NJ_DYNAMIC_VLC=1`.
+* Kept `NJ_DYNAMIC_VLC=0` as a build-time escape hatch for projects that prefer
   the original static-table model.
-* Route the dynamic tables through the existing NanoJPEG allocation shim so
+* Routed the dynamic tables through the existing NanoJPEG allocation shim so
   heap and caller-provided arena paths both report the 524,288-byte table block
   in their work-size/peak-allocation accounting.
+
+Issue #31 supersedes this interim direction by replacing the dynamic 16-bit
+lookup block with compact canonical Huffman decode and `NJ_VLC_FAST_BITS`.
 
 Acceptance criteria:
 
 * Cortex-M object-size report shows reduced fixed SRAM usage.
 * JPEG correctness tests still pass.
 
-### 6. Compact or XIP Huffman Decode Follow-Up
+### 6. Compact Huffman Decode
 
 The static BSS reduction moved the 524,288-byte VLC table block out of fixed
-SRAM, but it still appears in decode-time arena peak allocation. For
-`2560x1440` 4:2:0, the current production peak is:
+SRAM, but it still appeared in decode-time arena peak allocation. Issue #31
+replaced the 16-bit SRAM VLC lookup block with canonical Huffman metadata plus
+a configurable small fast table. With default `NJ_VLC_FAST_BITS=8`, the
+`2560x1440` 4:2:0 production peak is now:
 
 ```text
-524,288 bytes  dynamic NanoJPEG VLC tables
 184,320 bytes  streaming retained row cache
  61,440 bytes  NanoJPEG MCU-row temp buffers
 ----------
-770,048 bytes  tracked peak allocation
+245,760 bytes  tracked peak allocation
 ```
 
-The row-cache memory target is met. The next target is to replace the 16-bit
-SRAM VLC lookup tables with a compact Huffman representation and optional
-XIP-friendly standard-Huffman fast path.
-
-Preferred direction:
+Implemented direction:
 
 * Store canonical Huffman metadata for custom DHT tables.
 * Use a small configurable fast table, for example `NJ_VLC_FAST_BITS=8` or
   `NJ_VLC_FAST_BITS=10`, with a slow fallback for longer codes.
-* Optionally add const precomputed standard-Huffman tables that can live in
-  flash/XIP for controlled JPEG sources.
-* Keep custom-DHT JPEG support unless a build option explicitly selects
-  standard-Huffman-only behavior.
+* Keep custom-DHT JPEG support instead of requiring standard-Huffman-only input.
+* Do not allocate VLC/Huffman tables through the caller arena.
 
 Acceptance criteria:
 
-* `2560x1440` 4:2:0 production peak allocation drops below 270 KiB.
-* `jpeg streaming cache bytes` remains 184,320 unless intentionally remeasured.
+* `2560x1440` 4:2:0 production peak allocation is 245,760 bytes, below 270 KiB.
+* `jpeg streaming cache bytes` remains 184,320.
 * Production encode does not regress to the old 5,529,600-byte full
   component-plane allocation.
 * Strict ffmpeg decode and full CTest remain green.
