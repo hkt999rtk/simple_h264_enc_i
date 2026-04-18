@@ -7,8 +7,9 @@ so cycle counts are not confused with emulator behavior.
 ## Scaler Scope
 
 The benchmark firmware in `tests/qemu_scaler_bench.c` exercises
-`sh264e_resize_make_slice` on a deterministic 1280x720 NV12 source. Each run
-generates `BENCH_ITERS` encoder slices and writes:
+`sh264e_resize_make_slice` on a deterministic 1280x720 NV12 source. That
+geometry uses the exact 2x scaler fast path. Each run generates `BENCH_ITERS`
+encoder slices and writes:
 
 * `sh264e_bench_checksum` - nonzero correctness guard for the generated slices.
 * `sh264e_bench_cycles` - DWT cycle count around the resize loop.

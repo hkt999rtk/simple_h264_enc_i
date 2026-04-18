@@ -141,6 +141,9 @@ The resize tool accepts even source dimensions in the bilinear-friendly range:
 
 It reads a full source frame for file-based validation, then calls the library scaler to generate one 2560x16 luma / 8-row chroma output slice at a time and immediately feeds that slice to the progressive encoder.
 The library scaler uses fixed-point bilinear interpolation. When the source is already 2560x1440, `sh264e_resize_make_slice` bypasses scaling and points the output slice directly into the source frame.
+The common `1280x720 -> 2560x1440` and `5120x2880 -> 2560x1440`
+ratios use exact fixed-ratio fast paths that preserve the same half-pixel
+bilinear output as the general mapper for I420 and NV12.
 On ARM builds with DSP extension support, the scaler uses an `smlad` guarded path unless `SH264E_DISABLE_ARM_DSP` is defined.
 
 Encode a baseline JPEG memory-input path through the library wrapper:
