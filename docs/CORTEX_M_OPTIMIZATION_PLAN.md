@@ -103,3 +103,11 @@ The raw resize API includes exact fixed-ratio fast paths for
 `1280x720 -> 2560x1440` and `5120x2880 -> 2560x1440`. These paths bypass the
 general axis mapper but keep the same half-pixel bilinear samples and rounding,
 so I420 and NV12 slices remain byte-exact with the reference scaler.
+
+## H.264 Bit-Writer Status
+
+The H.264 RBSP writer uses a byte-oriented pending-byte accumulator. Aligned
+8-bit writes bypass the old per-bit loop, while unaligned Exp-Golomb, CAVLC,
+and RBSP trailing-bit writes still preserve the same MSB-first bit order and
+byte output. The change keeps the one-macroblock RBSP scratch size unchanged so
+downstream Annex B batching can focus on output streaming overhead.

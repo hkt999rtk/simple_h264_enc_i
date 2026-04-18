@@ -41,7 +41,8 @@ typedef struct sh264e_bit_writer_t {
     uint8_t *data;
     size_t capacity;
     size_t byte_pos;
-    unsigned bit_pos;
+    uint8_t pending_byte;
+    unsigned pending_bits;
     int error;
 } sh264e_bit_writer_t;
 
@@ -1543,43 +1544,77 @@ static void bw_init(sh264e_bit_writer_t *bw, uint8_t *data, size_t capacity)
     bw->data = data;
     bw->capacity = capacity;
     bw->byte_pos = 0;
-    bw->bit_pos = 0;
+    bw->pending_byte = 0;
+    bw->pending_bits = 0;
     bw->error = 0;
 }
 
 static size_t bw_size(const sh264e_bit_writer_t *bw)
 {
-    return bw->byte_pos + (bw->bit_pos != 0u ? 1u : 0u);
+    return bw->byte_pos + (bw->pending_bits != 0u ? 1u : 0u);
 }
 
-static void bw_write_bit(sh264e_bit_writer_t *bw, unsigned bit)
+static void bw_store_pending(sh264e_bit_writer_t *bw)
 {
-    if (bw->error != 0) {
-        return;
-    }
     if (bw->byte_pos >= bw->capacity) {
         bw->error = 1;
         return;
     }
-    if (bw->bit_pos == 0u) {
-        bw->data[bw->byte_pos] = 0;
+    bw->data[bw->byte_pos] = bw->pending_byte;
+}
+
+static void bw_commit_pending_byte(sh264e_bit_writer_t *bw)
+{
+    bw_store_pending(bw);
+    if (bw->error != 0) {
+        return;
     }
-    if ((bit & 1u) != 0u) {
-        bw->data[bw->byte_pos] |= (uint8_t)(1u << (7u - bw->bit_pos));
+    bw->byte_pos++;
+    bw->pending_byte = 0;
+    bw->pending_bits = 0;
+}
+
+static void bw_write_aligned_byte(sh264e_bit_writer_t *bw, uint8_t value)
+{
+    if (bw->byte_pos >= bw->capacity) {
+        bw->error = 1;
+        return;
     }
-    bw->bit_pos++;
-    if (bw->bit_pos == 8u) {
-        bw->bit_pos = 0;
-        bw->byte_pos++;
-    }
+    bw->data[bw->byte_pos++] = value;
+}
+
+static void bw_write_bits(sh264e_bit_writer_t *bw, uint32_t bits, unsigned count);
+
+static void bw_write_bit(sh264e_bit_writer_t *bw, unsigned bit)
+{
+    bw_write_bits(bw, bit & 1u, 1u);
 }
 
 static void bw_write_bits(sh264e_bit_writer_t *bw, uint32_t bits, unsigned count)
 {
-    unsigned i;
-    for (i = 0; i < count; i++) {
-        const unsigned shift = count - 1u - i;
-        bw_write_bit(bw, (bits >> shift) & 1u);
+    while (count > 0u && bw->error == 0) {
+        if (bw->pending_bits == 0u && count >= 8u) {
+            const unsigned shift = count - 8u;
+            bw_write_aligned_byte(bw, (uint8_t)((bits >> shift) & 0xffu));
+            count -= 8u;
+        } else {
+            const unsigned free_bits = 8u - bw->pending_bits;
+            const unsigned take = count < free_bits ? count : free_bits;
+            const unsigned shift = count - take;
+            const uint32_t mask = (1u << take) - 1u;
+            const uint8_t chunk = (uint8_t)((bits >> shift) & mask);
+
+            bw->pending_byte |= (uint8_t)(chunk << (free_bits - take));
+            bw->pending_bits += take;
+            bw_store_pending(bw);
+            if (bw->error != 0) {
+                return;
+            }
+            count -= take;
+            if (bw->pending_bits == 8u) {
+                bw_commit_pending_byte(bw);
+            }
+        }
     }
 }
 
@@ -1619,7 +1654,7 @@ static void bw_write_se(sh264e_bit_writer_t *bw, int32_t value)
 static void bw_rbsp_trailing_bits(sh264e_bit_writer_t *bw)
 {
     bw_write_bit(bw, 1);
-    while (bw->bit_pos != 0u) {
+    while (bw->pending_bits != 0u) {
         bw_write_bit(bw, 0);
     }
 }
