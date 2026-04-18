@@ -34,6 +34,30 @@ Issue #31 reduced production peak allocation below the 270 KiB target without
 increasing the 184,320-byte row cache or regressing to full component-plane
 decode. Custom DHT baseline JPEGs remain supported.
 
+## Output Buffer Boundary
+
+The measurements above exclude H.264 output buffering. The current one-shot
+JPEG API and `sh264e_encode_jpeg` tool still allocate the maximum complete-frame
+H.264 output capacity:
+
+```text
+header max = 1,024 bytes
+slice max  = 126,976 bytes
+slice count = 90
+max output = 1,024 + 90 * 126,976 = 11,428,864 bytes
+```
+
+This is a caller-owned output capacity, not JPEG decoder working memory. It is
+much larger than typical encoded output; the measured `2560x1440` JPEG 4:2:0
+fixture currently emits about 123 KiB of H.264 data.
+
+The next embedded-memory target is a streaming H.264 output consumer API for
+the JPEG path. The library can already produce SPS/PPS and one IDR slice at a
+time internally; the missing piece is an API that calls a caller-provided
+consumer after each complete Annex B chunk. With that API, embedded callers only
+need a reusable output chunk buffer sized for `max(header, one slice)`, currently
+126,976 bytes, instead of the 11,428,864-byte one-shot maximum output buffer.
+
 ## Regression Coverage
 
 `tests/run_ffmpeg_integration.py` asserts the exact production arena work,

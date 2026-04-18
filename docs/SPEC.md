@@ -93,6 +93,7 @@ Required API entry points:
 * `sh264e_resize_make_slice`
 * `sh264e_jpeg_get_slice_buffer_size`
 * `sh264e_encode_jpeg_idr`
+* `sh264e_encode_jpeg_idr_with_arena_stream`
 
 Required public API concepts:
 
@@ -102,6 +103,7 @@ Required public API concepts:
 * `sh264e_slice_t` — caller-provided progressive slice buffers
 * `sh264e_frame_t` — caller-provided input frame buffers
 * `sh264e_encoder_t` — opaque encoder handle
+* `sh264e_output_consumer_t` — callback that consumes complete Annex B output chunks
 
 The output bitstream buffer is provided by the caller. The library reports bytes written or returns a buffer-too-small error.
 
@@ -323,11 +325,25 @@ H.264 IDR slice encode
 ```
 sh264e_jpeg_get_slice_buffer_size
 sh264e_encode_jpeg_idr
+sh264e_encode_jpeg_idr_with_arena_stream
 ```
 
-The JPEG API accepts a caller-provided JPEG byte buffer and a caller-provided H.264 output buffer. File I/O remains outside the library.
+The JPEG APIs accept a caller-provided JPEG byte buffer. File I/O remains outside the library.
 
-NanoJPEG decodes baseline JPEG into an internal RGB or grayscale image. The library then scales that decoded image directly into one YUV420 encoder slice at a time:
+The one-shot JPEG API writes a complete H.264 IDR frame into a caller-provided output buffer. This API is convenient for host tools, but it may require a worst-case full-frame output buffer.
+
+The embedded JPEG API should support streaming H.264 output through a caller-provided consumer callback:
+
+```c
+typedef sh264e_status_t (*sh264e_output_consumer_t)(
+    void *user,
+    const uint8_t *data,
+    size_t size);
+```
+
+The streaming-output JPEG API should use a reusable caller-provided output chunk buffer sized for `max(header, one slice)`, call the consumer once for SPS/PPS and once per IDR slice, and stop deterministically if the consumer returns an error. The library must not call file APIs; tools/tests may implement a consumer that writes to a file.
+
+NanoJPEG decodes baseline JPEG through MCU-row streaming. The library scales decoded component rows directly into one YUV420 encoder slice at a time:
 
 * I420 encoder config: Y, U, and V slice planes
 * NV12 encoder config: Y and interleaved UV slice planes

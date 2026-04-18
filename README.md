@@ -127,6 +127,7 @@ The arena-backed production path now uses MCU-row streaming by default. It keeps
 The printed peak allocation includes the streaming row cache and MCU-row temp buffers; it excludes caller-owned JPEG input, arena header overhead, slice-work, H.264 output buffers, and NanoJPEG's compact in-context Huffman metadata.
 The hidden `--streaming-prototype` flag remains as a debug/comparison path for the same MCU-row streaming machinery.
 The heap-backed convenience wrapper still exists for non-deterministic host usage, but embedded integrations should prefer the arena-backed entry point.
+The current JPEG tool still uses the one-shot H.264 output API and allocates `sh264e_get_max_output_size()` bytes for the complete frame. The intended embedded follow-up is a streaming H.264 output consumer API so tools can write each SPS/PPS or slice chunk as it is produced, while embedded callers can forward chunks to flash, storage, DMA, or a ring buffer without a full-frame output buffer.
 
 For Cortex-M validation, CMake builds QEMU smoke firmware for M3/M4/M7 when the ARM bare-metal toolchain and QEMU are available. CMake first probes whether `arm-none-eabi-gcc` can compile the library's standard-header usage; if the toolchain is only partially installed, QEMU firmware tests are skipped instead of breaking the host build.
 
@@ -185,6 +186,7 @@ JPEG pipeline entry points:
 * `sh264e_jpeg_get_last_allocation_stats`
 * `sh264e_encode_jpeg_idr`
 * `sh264e_encode_jpeg_idr_with_arena`
+* planned: `sh264e_encode_jpeg_idr_with_arena_stream`
 
 Frame-mode convenience entry points:
 

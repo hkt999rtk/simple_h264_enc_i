@@ -230,6 +230,53 @@ Acceptance criteria:
   component-plane allocation.
 * Strict ffmpeg decode and full CTest remain green.
 
+### 7. Streaming H.264 Output Consumer
+
+After JPEG row streaming and compact Huffman decode, the largest remaining
+embedded RAM risk is the one-shot H.264 output buffer used by the current JPEG
+API/tool. `sh264e_get_max_output_size()` reports the worst-case complete-frame
+capacity:
+
+```text
+1,024 header bytes + 90 slices * 126,976 bytes = 11,428,864 bytes
+```
+
+This is caller-owned output capacity, not JPEG decoder memory. The actual
+`2560x1440` JPEG 4:2:0 test bitstream is much smaller, but embedded callers
+still need the worst-case capacity when using the one-shot API.
+
+Target behavior:
+
+* Add a public output consumer callback, for example
+  `sh264e_output_consumer_t`.
+* Add an arena-backed JPEG streaming-output API that reuses one output chunk
+  buffer for SPS/PPS and each IDR slice.
+* Call the consumer once per complete Annex B chunk.
+* Keep file I/O outside the library; tools/tests may implement file consumers.
+* Preserve the one-shot API as a convenience wrapper, potentially implemented
+  through a memory consumer.
+
+Memory target for `2560x1440` JPEG 4:2:0 embedded path:
+
+| Area | Bytes |
+| --- | ---: |
+| JPEG work arena | 245,904 |
+| JPEG/scaler slice work | 61,440 |
+| Reusable H.264 output chunk buffer | 126,976 |
+| Encoder heap | about 191,024 |
+| Static mutable RAM | about 4,529 |
+| Total, excluding compressed JPEG input | about 630 KiB |
+
+Acceptance criteria:
+
+* Embedded JPEG encode path no longer requires the 11,428,864-byte max
+  complete-frame output buffer.
+* Consumer callback errors stop encode deterministically.
+* Tool/test file output uses a consumer implemented outside the library.
+* One-shot API output and streaming-consumer output are byte-for-byte identical
+  for representative fixtures.
+* Strict ffmpeg decode and memory regression tests remain green.
+
 ## Test Plan
 
 Documentation-only commit:
@@ -266,6 +313,7 @@ Recommended issue sequence:
 4. `JPEG streaming: memory regression tests and measurement report`
 5. `NanoJPEG: reduce static context BSS`
 6. `NanoJPEG: replace 16-bit SRAM VLC tables with compact/XIP Huffman decode`
+7. `JPEG: add streaming H.264 output consumer API`
 
 Do not add `help wanted` or `need help` labels unless an issue is actually
 blocked by external hardware or tooling.
