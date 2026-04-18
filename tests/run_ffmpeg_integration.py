@@ -6,6 +6,10 @@ from pathlib import Path
 
 WIDTH = 2560
 HEIGHT = 1440
+MB_SIZE = 16
+MB_WIDTH = WIDTH // MB_SIZE
+MB_HEIGHT = HEIGHT // MB_SIZE
+IDR_MB_NALUS = MB_WIDTH * MB_HEIGHT
 SMALL_WIDTH = 1280
 SMALL_HEIGHT = 720
 LARGE_WIDTH = 2560
@@ -70,6 +74,87 @@ def run_expect_fail(cmd, stderr_contains=None):
         raise RuntimeError(f"expected command to fail: {cmd}")
     if stderr_contains is not None and stderr_contains not in result.stderr:
         raise RuntimeError(f"expected stderr to contain {stderr_contains!r}; got {result.stderr!r}")
+
+
+def annexb_nalus(data):
+    starts = []
+    i = 0
+    while i + 3 <= len(data):
+        if data[i:i + 3] == b"\x00\x00\x01":
+            starts.append((i, 3))
+            i += 3
+        elif i + 4 <= len(data) and data[i:i + 4] == b"\x00\x00\x00\x01":
+            starts.append((i, 4))
+            i += 4
+        else:
+            i += 1
+
+    for index, (start_code, prefix_len) in enumerate(starts):
+        start = start_code + prefix_len
+        end = starts[index + 1][0] if index + 1 < len(starts) else len(data)
+        if start < end:
+            yield data[start], data[start + 1:end]
+
+
+def rbsp_from_ebsp(payload):
+    rbsp = bytearray()
+    zero_count = 0
+    for byte in payload:
+        if zero_count >= 2 and byte == 0x03:
+            zero_count = 0
+            continue
+        rbsp.append(byte)
+        if byte == 0:
+            zero_count += 1
+        else:
+            zero_count = 0
+    return bytes(rbsp)
+
+
+def read_ue(rbsp):
+    bit = 0
+    leading_zero_bits = 0
+    total_bits = len(rbsp) * 8
+
+    while bit < total_bits:
+        value = (rbsp[bit // 8] >> (7 - (bit % 8))) & 1
+        bit += 1
+        if value:
+            break
+        leading_zero_bits += 1
+        if leading_zero_bits >= 31:
+            raise RuntimeError("Exp-Golomb code is too large")
+    else:
+        raise RuntimeError("missing Exp-Golomb stop bit")
+
+    info_bits = 0
+    for _ in range(leading_zero_bits):
+        if bit >= total_bits:
+            raise RuntimeError("truncated Exp-Golomb code")
+        info_bits = (info_bits << 1) | ((rbsp[bit // 8] >> (7 - (bit % 8))) & 1)
+        bit += 1
+    return ((1 << leading_zero_bits) - 1) + info_bits
+
+
+def validate_independent_mb_bitstream(bitstream):
+    nalus = list(annexb_nalus(bitstream.read_bytes()))
+    expected_nalus = 2 + IDR_MB_NALUS
+    if len(nalus) != expected_nalus:
+        raise RuntimeError(f"{bitstream}: got {len(nalus)} NALUs, expected {expected_nalus}")
+    if (nalus[0][0] & 0x1F) != 7:
+        raise RuntimeError(f"{bitstream}: first NALU is not SPS")
+    if (nalus[1][0] & 0x1F) != 8:
+        raise RuntimeError(f"{bitstream}: second NALU is not PPS")
+
+    for index, (header, payload) in enumerate(nalus[2:]):
+        nal_type = header & 0x1F
+        if nal_type != 5:
+            raise RuntimeError(f"{bitstream}: NALU {index + 2} has type {nal_type}, expected IDR")
+        first_mb = read_ue(rbsp_from_ebsp(payload))
+        if first_mb != index:
+            raise RuntimeError(
+                f"{bitstream}: IDR NALU {index} has first_mb_in_slice {first_mb}, expected {index}"
+            )
 
 
 def make_i420(path):
@@ -158,6 +243,7 @@ def validate_bitstream(ffprobe, ffmpeg, bitstream):
 
     run([ffmpeg, "-v", "error", "-i", str(bitstream), "-f", "null", "-"])
     run([ffmpeg, "-v", "error", "-xerror", "-i", str(bitstream), "-f", "null", "-"])
+    validate_independent_mb_bitstream(bitstream)
 
 
 def validate_image_pix_fmt(ffprobe, image, expected_pix_fmt):
