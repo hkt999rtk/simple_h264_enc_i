@@ -67,6 +67,8 @@ Future Cortex-M optimization issues are tracked in
 size, bitstream scratch size, or reported sub-block composition must update this
 report, the public diagnostic output, and the regression tests in the same
 change. Cortex-M fast paths should not add persistent encoder SRAM by default.
+The luma/chroma DC residual `USADA8`/`USAD8` fast path is compute-only and does
+not change any encoder-owned memory block or the reported `296` byte total.
 The byte-oriented bit-writer accumulator is internal writer state and does not
 change the `256` byte RBSP scratch block, encoder arena size, or reported
 `296` byte total.
