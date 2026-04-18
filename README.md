@@ -106,6 +106,7 @@ The test suite covers:
 * ffmpeg/ffprobe integration when those tools are available
 * Cortex-M QEMU scaler smoke tests when `arm-none-eabi-gcc` and `qemu-system-arm` are available and usable
 * Cortex-M QEMU scaler benchmark firmware correctness for default DSP-capable and portable C variants when those tools are available and usable
+* Cortex-M QEMU encoder benchmark firmware correctness for default DSP-capable and portable C variants when those tools are available and usable
 * production-profile symbol audit when `nm` or `llvm-nm` is available
 
 ## CLI Example
@@ -197,6 +198,10 @@ The QEMU benchmark preflight targets are:
 | `sh264e_qemu_scaler_bench_m4_portable` | `cortex-m4` / `mps2-an386` | `SH264E_DISABLE_ARM_DSP` | portable C comparison preflight |
 | `sh264e_qemu_scaler_bench_m7` | `cortex-m7` / `mps2-an500` | default DSP-capable build | M7 benchmark preflight |
 | `sh264e_qemu_scaler_bench_m7_portable` | `cortex-m7` / `mps2-an500` | `SH264E_DISABLE_ARM_DSP` | M7 portable C comparison preflight |
+| `sh264e_qemu_encoder_bench_m4` | `cortex-m4` / `mps2-an386` | default DSP-capable build | progressive H.264 encoder benchmark preflight |
+| `sh264e_qemu_encoder_bench_m4_portable` | `cortex-m4` / `mps2-an386` | `SH264E_DISABLE_ARM_DSP` | encoder portable C comparison preflight |
+| `sh264e_qemu_encoder_bench_m7` | `cortex-m7` / `mps2-an500` | default DSP-capable build | M7 encoder benchmark preflight |
+| `sh264e_qemu_encoder_bench_m7_portable` | `cortex-m7` / `mps2-an500` | `SH264E_DISABLE_ARM_DSP` | M7 encoder portable C comparison preflight |
 
 QEMU validates firmware build/run behavior and stable nonzero `sh264e_bench_checksum`. Treat `sh264e_bench_cycles` from QEMU as a preflight signal only; final tuning-quality cycle counts still need real Cortex-M hardware with documented CPU, clock, compiler flags, cache state, and memory placement.
 Use `docs/CORTEX_M_SCALER_BENCHMARKS.md` as the capture checklist and result table for real-board portable C versus DSP measurements.

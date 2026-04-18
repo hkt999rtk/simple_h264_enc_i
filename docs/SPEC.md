@@ -721,6 +721,7 @@ Validate:
 * Invalid resize dimensions fail
 * Cortex-M3/M4/M7 QEMU scaler smoke tests pass when the ARM bare-metal toolchain and QEMU are available
 * Cortex-M4 QEMU scaler benchmark firmware passes correctness checks
+* Cortex-M4/M7 QEMU encoder benchmark firmware passes correctness checks for default DSP-capable and portable C builds
 
 ---
 
