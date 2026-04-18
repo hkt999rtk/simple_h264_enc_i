@@ -35,7 +35,7 @@ follow-up work.
 4. Batch Annex B streaming output runs that do not need emulation-prevention
    insertion.
 5. Add exact scaler fast paths for `1280x720 -> 2560x1440` and
-   `5120x2880 -> 2560x1440`.
+   `5120x2880 -> 2560x1440` for I420 and NV12.
 6. Reduce the `2560x1440` JPEG 4:2:0 1:1 NV12 slice-work staging requirement.
 7. Evaluate exact DSP vertical blend optimization for the bilinear scaler.
 
@@ -106,3 +106,10 @@ unavailable-neighbor predictor.
 Defining `SH264E_DISABLE_ARM_DSP` keeps the portable C loops, and both paths
 preserve the encoder bitstream checksum. The change adds no encoder-owned
 persistent SRAM.
+
+## Scaler Fast-Path Status
+
+The raw resize API includes exact fixed-ratio fast paths for
+`1280x720 -> 2560x1440` and `5120x2880 -> 2560x1440`. These paths bypass the
+general axis mapper but keep the same half-pixel bilinear samples and rounding,
+so I420 and NV12 slices remain byte-exact with the reference scaler.

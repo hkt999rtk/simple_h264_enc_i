@@ -299,6 +299,10 @@ Source sample indices are clamped at image boundaries.
 
 The library scaler implementation must use fixed-point integer arithmetic for coordinate mapping and bilinear interpolation. The inner pixel loops should avoid division so the path remains suitable for ARM Cortex-M class CPUs.
 
+Exact `2x` and `0.5x` source-to-target ratios may use specialized coordinate
+paths that avoid the general mapper. These paths must remain byte-exact with
+the half-pixel bilinear formula above for both I420 and NV12 output.
+
 When compiled for ARM cores with the DSP extension, the bilinear horizontal blend may use `smlad`/DSP intrinsics or inline assembly behind a compile-time guard. Defining `SH264E_DISABLE_ARM_DSP` must force the portable C path.
 
 ### Cortex-M Optimization Policy
@@ -718,6 +722,7 @@ Validate:
 
 * 1:1 resize reports zero work-buffer bytes and bypasses copy
 * Scaled resize reports non-zero work-buffer bytes and emits encoder-sized slices
+* Exact 2x and 0.5x resize paths match the general half-pixel bilinear reference for I420 and NV12
 * Invalid resize dimensions fail
 * Cortex-M3/M4/M7 QEMU scaler smoke tests pass when the ARM bare-metal toolchain and QEMU are available
 * Cortex-M4 QEMU scaler benchmark firmware passes correctness checks
