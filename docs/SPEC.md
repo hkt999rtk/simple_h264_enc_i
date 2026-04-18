@@ -425,12 +425,12 @@ by the last JPEG encode. These are diagnostic/stat APIs for regression reporting
 streaming-prototype hooks remain private test hooks gated by
 `SH264E_ENABLE_JPEG_TEST_HOOKS`.
 `sh264e_encoder_get_memory_report` reports fixed-v1 encoder-owned memory
-without constructing an encoder. The current report is 2,088 bytes total:
-40 bytes of context/config and 2,048 bytes of one-macroblock RBSP scratch. The
+without constructing an encoder. The current report is 296 bytes total:
+40 bytes of context/config and 256 bytes of one-macroblock RBSP scratch. The
 row reconstructed luma/chroma slice storage and row neighbor/nonzero state are
 not retained in the encoder arena.
 `sh264e_encoder_get_work_size` reports the caller-provided arena requirement for
-the same fixed-v1 encoder state, currently 2,095 bytes including worst-case
+the same fixed-v1 encoder state, currently 303 bytes including worst-case
 alignment padding. `sh264e_encoder_create_with_arena` constructs an encoder in
 that caller-owned block; `sh264e_encoder_destroy` does not free arena memory.
 

@@ -26,9 +26,9 @@ storage and `.rodata`:
 | JPEG work arena | 123,024 | 1:1 4:2:0 path: one MCU-row cache plus NanoJPEG MCU-row temp buffers |
 | JPEG/scaler slice work | 0 I420 / 20,480 NV12 | Path-specific query for 1:1 4:2:0; conservative unknown-JPEG capacity remains 61,440 |
 | Reusable H.264 output chunk buffer | 4,096 | Byte-stream flush buffer |
-| Encoder arena | 2,095 | Caller-provided placement; see `docs/ENCODER_MEMORY_REPORT.md` |
+| Encoder arena | 303 | Caller-provided placement; see `docs/ENCODER_MEMORY_REPORT.md` |
 | Static mutable RAM | about 5,041 | Excludes `.rodata`; includes NanoJPEG's 512-byte compressed-input window |
-| Total | about 135 KiB I420 / 155 KiB NV12 | Excludes compressed JPEG input |
+| Total | about 130 KiB I420 / 150 KiB NV12 | Excludes compressed JPEG input |
 
 The old full decoded JPEG component-frame allocation was 5,529,600 bytes for
 `2560x1440` 4:2:0 and is no longer allowed for public JPEG APIs.
@@ -115,7 +115,7 @@ Target the opaque encoder heap line item:
 
 | Previous | Implemented |
 | ---: | --- |
-| 191,048 bytes | 2,088-byte sub-block report; 2,095-byte arena |
+| 191,048 bytes | 296-byte sub-block report; 303-byte arena |
 
 This is a measurement issue before optimization. The report should identify the
 major encoder state contributors such as reconstructed storage, neighbor/nonzero
@@ -126,11 +126,11 @@ Measured fixed-v1 composition after independent-MB mode:
 | Block | Bytes |
 | --- | ---: |
 | Encoder context/config | 40 |
-| Bitstream scratch | 2,048 |
+| Bitstream scratch | 256 |
 | Reconstructed luma slice | 0 |
 | Reconstructed chroma slices | 0 |
 | Neighbor/nonzero state | 0 |
-| Total encoder memory | 2,088 |
+| Total encoder memory | 296 |
 
 Acceptance focus:
 
@@ -167,7 +167,7 @@ Acceptance focus:
 
 Implemented arena contract:
 
-* `sh264e_encoder_get_work_size` reports 2,095 bytes for the fixed v1 config,
+* `sh264e_encoder_get_work_size` reports 303 bytes for the fixed v1 config,
   including worst-case opaque-control alignment padding.
 * `sh264e_encoder_create_with_arena` supports misaligned caller memory and
   avoids production heap allocation for encoder-owned state.

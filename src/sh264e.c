@@ -21,7 +21,7 @@
 #define SH264E_MBS_X (SH264E_V1_WIDTH / SH264E_MB_SIZE)
 #define SH264E_MBS_Y (SH264E_V1_HEIGHT / SH264E_MB_SIZE)
 #define SH264E_CHROMA_WIDTH (SH264E_V1_WIDTH / 2u)
-#define SH264E_MAX_IDR_MB_RBSP_SIZE 2048u
+#define SH264E_MAX_IDR_MB_RBSP_SIZE 256u
 #define SH264E_MAX_IDR_MB_NALU_OUTPUT_SIZE \
     (SH264E_MAX_IDR_MB_RBSP_SIZE + (SH264E_MAX_IDR_MB_RBSP_SIZE / 2u) + 4u)
 #define SH264E_MAX_QP 51
@@ -1939,18 +1939,6 @@ static void write_luma_residual_dc_only(sh264e_bit_writer_t *bw, int level, unsi
     bw_write_bit(bw, 1);                 /* total_zeros = 0 for TotalCoeff=1 */
 }
 
-static uint32_t cavlc_parsed_level_code(unsigned prefix, unsigned suffix_length, uint32_t suffix)
-{
-    uint32_t level_code = ((prefix < 15u ? prefix : 15u) << suffix_length) + suffix;
-    if (prefix >= 15u && suffix_length == 0u) {
-        level_code += 15u;
-    }
-    if (prefix >= 16u) {
-        level_code += (1u << (prefix - 3u)) - 4096u;
-    }
-    return level_code;
-}
-
 static int write_cavlc_level(sh264e_bit_writer_t *bw, int level)
 {
     const uint32_t sign = level < 0 ? 1u : 0u;
@@ -1958,36 +1946,32 @@ static int write_cavlc_level(sh264e_bit_writer_t *bw, int level)
     const uint32_t final_level_code = (abs_level * 2u) - 2u + sign;
     const uint32_t target = final_level_code - 2u;
     unsigned prefix;
+    unsigned suffix_size = 0u;
+    uint32_t suffix = 0u;
+    unsigned i;
 
-    for (prefix = 0; prefix < 32u; prefix++) {
-        unsigned suffix_size = 0;
-        uint32_t suffix_limit = 1u;
-        uint32_t suffix;
-
-        if (prefix == 14u) {
-            suffix_size = 4u;
-        } else if (prefix >= 15u) {
-            suffix_size = prefix - 3u;
-            if (suffix_size > 20u) {
-                return 0;
-            }
-        }
-        suffix_limit = 1u << suffix_size;
-        for (suffix = 0; suffix < suffix_limit; suffix++) {
-            if (cavlc_parsed_level_code(prefix, 0, suffix) == target) {
-                unsigned i;
-                for (i = 0; i < prefix; i++) {
-                    bw_write_bit(bw, 0);
-                }
-                bw_write_bit(bw, 1);
-                if (suffix_size > 0u) {
-                    bw_write_bits(bw, suffix, suffix_size);
-                }
-                return 1;
-            }
-        }
+    if (target < 14u) {
+        prefix = (unsigned)target;
+    } else if (target < 30u) {
+        prefix = 14u;
+        suffix_size = 4u;
+        suffix = target - 14u;
+    } else if (target <= 4125u) {
+        prefix = 15u;
+        suffix_size = 12u;
+        suffix = target - 30u;
+    } else {
+        return 0;
     }
-    return 0;
+
+    for (i = 0; i < prefix; i++) {
+        bw_write_bit(bw, 0);
+    }
+    bw_write_bit(bw, 1);
+    if (suffix_size > 0u) {
+        bw_write_bits(bw, suffix, suffix_size);
+    }
+    return 1;
 }
 
 static void write_chroma_dc_residual(sh264e_bit_writer_t *bw, int level)

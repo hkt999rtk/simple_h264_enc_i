@@ -70,9 +70,9 @@ capacity:
 
 ```text
 header max = 1,024 bytes
-slice max  = 492,160 bytes
+slice max  = 62,080 bytes
 slice count = 90
-max output = 1,024 + 90 * 492,160 = 44,295,424 bytes
+max output = 1,024 + 90 * 62,080 = 5,588,224 bytes
 ```
 
 This is a caller-owned H.264 output capacity, not JPEG decoder working memory,
@@ -82,8 +82,8 @@ the 14,400 one-macroblock IDR slice headers.
 
 The production JPEG tool path now uses the streaming H.264 output consumer API
 and reuses one caller-owned byte-stream flush buffer, currently 4,096 bytes,
-instead of the 44,295,424-byte one-shot maximum output buffer or the old
-492,160-byte one-input-row output chunk. The tool writes Annex B chunks through a
+instead of the 5,588,224-byte one-shot maximum output buffer or the
+62,080-byte one-input-row output chunk. The tool writes Annex B chunks through a
 file consumer outside the library; tests also cover tiny chunk boundaries to
 lock emulation-prevention behavior across flushes.
 
@@ -95,14 +95,14 @@ storage and `.rodata`, the current budget is:
 | JPEG work arena | 123,024 |
 | JPEG/scaler slice work | 0 for I420, 20,480 for NV12 |
 | Reusable H.264 output chunk buffer | 4,096 |
-| Encoder arena | 2,095 |
+| Encoder arena | 303 |
 | Static mutable RAM | about 5,041 |
-| Rounded planning budget | about 135 KiB I420 / 155 KiB NV12 |
+| Rounded planning budget | about 130 KiB I420 / 150 KiB NV12 |
 
-The I420 arithmetic subtotal of the rows above is about 134,256 bytes, or about
-131 KiB in binary units. The equivalent NV12 subtotal is about 154,736 bytes,
-or about 151 KiB. The rounded planning budget is about 135 KiB for I420 and
-about 155 KiB for NV12 on this embedded path.
+The I420 arithmetic subtotal of the rows above is about 132,464 bytes, or about
+129 KiB in binary units. The equivalent NV12 subtotal is about 152,944 bytes,
+or about 149 KiB. The rounded planning budget is about 130 KiB for I420 and
+about 150 KiB for NV12 on this embedded path.
 
 The encoder arena row is reported by `sh264e_encoder_get_work_size`; see
 `docs/ENCODER_MEMORY_REPORT.md` for the raw context, bitstream scratch,
