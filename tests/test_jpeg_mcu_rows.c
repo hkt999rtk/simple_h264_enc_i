@@ -116,6 +116,50 @@ static int collect_mcu_row(int mcu_y, void *user)
     return 0;
 }
 
+static int strip_dht_segments(uint8_t *jpeg, size_t *jpeg_size)
+{
+    size_t read_pos = 2u;
+    size_t write_pos = 2u;
+    int removed = 0;
+
+    if (jpeg == NULL || jpeg_size == NULL || *jpeg_size < 4u ||
+        jpeg[0] != 0xffu || jpeg[1] != 0xd8u) {
+        return 0;
+    }
+    while (read_pos + 1u < *jpeg_size) {
+        const uint8_t marker = jpeg[read_pos + 1u];
+        size_t segment_len;
+        size_t total_len;
+
+        if (jpeg[read_pos] != 0xffu) {
+            return 0;
+        }
+        if (marker == 0xdau) {
+            memmove(&jpeg[write_pos], &jpeg[read_pos], *jpeg_size - read_pos);
+            write_pos += *jpeg_size - read_pos;
+            *jpeg_size = write_pos;
+            return removed;
+        }
+        if (read_pos + 4u > *jpeg_size) {
+            return 0;
+        }
+        segment_len = ((size_t)jpeg[read_pos + 2u] << 8) | jpeg[read_pos + 3u];
+        total_len = segment_len + 2u;
+        if (segment_len < 2u || read_pos + total_len > *jpeg_size) {
+            return 0;
+        }
+        if (marker == 0xc4u) {
+            read_pos += total_len;
+            removed = 1;
+            continue;
+        }
+        memmove(&jpeg[write_pos], &jpeg[read_pos], total_len);
+        read_pos += total_len;
+        write_pos += total_len;
+    }
+    return 0;
+}
+
 static int expect_status(const char *name, int got, int expected)
 {
     if (got != expected) {
@@ -274,6 +318,31 @@ static int unsupported_sof_is_deterministic(void)
            expect_int("unsupported callback count", state.row_count, 0);
 }
 
+static int missing_dht_is_deterministic(void)
+{
+    uint8_t jpeg[512];
+    size_t jpeg_size = 0u;
+    row_callback_state_t state;
+    int status;
+
+    if (!hex_to_bytes(k_color_jpeg_hex, jpeg, sizeof(jpeg), &jpeg_size)) {
+        fprintf(stderr, "failed to decode missing-DHT fixture hex\n");
+        return 0;
+    }
+    if (!strip_dht_segments(jpeg, &jpeg_size)) {
+        fprintf(stderr, "failed to strip DHT marker from fixture\n");
+        return 0;
+    }
+
+    memset(&state, 0, sizeof(state));
+    state.fail_after_rows = -1;
+    njInit();
+    status = njDecodeMcuRows(jpeg, (int)jpeg_size, collect_mcu_row, &state);
+    njDone();
+    return expect_status("missing DHT", status, NJ_SYNTAX_ERROR) &&
+           expect_int("missing DHT callback count", state.row_count, 0);
+}
+
 int main(void)
 {
     int ok = 1;
@@ -282,6 +351,7 @@ int main(void)
     ok &= decode_and_check_gray();
     ok &= callback_abort_is_deterministic();
     ok &= unsupported_sof_is_deterministic();
+    ok &= missing_dht_is_deterministic();
 
     return ok ? 0 : 1;
 }
