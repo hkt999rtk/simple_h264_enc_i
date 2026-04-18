@@ -196,6 +196,42 @@ Acceptance criteria:
 * Cortex-M object-size report shows reduced fixed SRAM usage.
 * JPEG correctness tests still pass.
 
+### 6. Compact or XIP Huffman Decode Follow-Up
+
+The static BSS reduction moved the 524,288-byte VLC table block out of fixed
+SRAM, but it still appears in decode-time arena peak allocation. For
+`2560x1440` 4:2:0, the current production peak is:
+
+```text
+524,288 bytes  dynamic NanoJPEG VLC tables
+184,320 bytes  streaming retained row cache
+ 61,440 bytes  NanoJPEG MCU-row temp buffers
+----------
+770,048 bytes  tracked peak allocation
+```
+
+The row-cache memory target is met. The next target is to replace the 16-bit
+SRAM VLC lookup tables with a compact Huffman representation and optional
+XIP-friendly standard-Huffman fast path.
+
+Preferred direction:
+
+* Store canonical Huffman metadata for custom DHT tables.
+* Use a small configurable fast table, for example `NJ_VLC_FAST_BITS=8` or
+  `NJ_VLC_FAST_BITS=10`, with a slow fallback for longer codes.
+* Optionally add const precomputed standard-Huffman tables that can live in
+  flash/XIP for controlled JPEG sources.
+* Keep custom-DHT JPEG support unless a build option explicitly selects
+  standard-Huffman-only behavior.
+
+Acceptance criteria:
+
+* `2560x1440` 4:2:0 production peak allocation drops below 270 KiB.
+* `jpeg streaming cache bytes` remains 184,320 unless intentionally remeasured.
+* Production encode does not regress to the old 5,529,600-byte full
+  component-plane allocation.
+* Strict ffmpeg decode and full CTest remain green.
+
 ## Test Plan
 
 Documentation-only commit:
@@ -231,6 +267,7 @@ Recommended issue sequence:
 3. `JPEG streaming: switch arena-backed JPEG encode to streaming path`
 4. `JPEG streaming: memory regression tests and measurement report`
 5. `NanoJPEG: reduce static context BSS`
+6. `NanoJPEG: replace 16-bit SRAM VLC tables with compact/XIP Huffman decode`
 
 Do not add `help wanted` or `need help` labels unless an issue is actually
 blocked by external hardware or tooling.

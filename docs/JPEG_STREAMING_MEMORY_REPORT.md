@@ -21,6 +21,22 @@ same JPEG allocation shim as the row cache so embedded integrations can place it
 in the caller-provided arena. The streaming row cache is the decoded-image
 replacement for the previous full component planes.
 
+For the `2560x1440` 4:2:0 row, the measured peak breaks down as:
+
+| Block | Bytes |
+| --- | ---: |
+| Dynamic NanoJPEG VLC tables | 524,288 |
+| Streaming retained row cache | 184,320 |
+| NanoJPEG MCU-row temp buffers | 61,440 |
+| Total tracked peak allocation | 770,048 |
+
+The row cache target has been met. The next memory bottleneck is the dynamic
+VLC table block. Issue #31 tracks replacing the 16-bit SRAM VLC lookup tables
+with compact Huffman decode and, where appropriate, an XIP-friendly standard
+Huffman fast path. The target for `2560x1440` 4:2:0 is to reduce production peak
+allocation below 270 KiB without increasing the 184,320-byte row cache or
+regressing to full component-plane decode.
+
 ## Regression Coverage
 
 `tests/run_ffmpeg_integration.py` asserts the exact production arena work,
@@ -67,3 +83,7 @@ jpeg work arena bytes: 770216
 jpeg peak allocation bytes: 770048
 jpeg streaming cache bytes: 184320
 ```
+
+After issue #31 lands, these expected peak/work values should be updated while
+keeping the row-cache value stable unless the row-cache algorithm is
+intentionally changed and remeasured.

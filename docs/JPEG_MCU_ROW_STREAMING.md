@@ -202,6 +202,14 @@ The production memory regression report in
 `1280x720` 4:2:0 uses 616,616 bytes of JPEG work arena and `2560x1440` 4:2:0
 uses 770,216 bytes, including the dynamic NanoJPEG VLC table block.
 
+That arena size is no longer dominated by decoded image storage. The
+`2560x1440` 4:2:0 row cache is 184,320 bytes, while the dynamic NanoJPEG VLC
+tables account for 524,288 bytes of the 770,048-byte tracked peak allocation.
+Issue #31 tracks replacing the 16-bit SRAM VLC tables with compact Huffman
+decode and optional XIP-friendly standard-Huffman tables. The target is to bring
+the same production path below 270 KiB peak allocation while keeping the
+184,320-byte row cache stable.
+
 ## Validation Plan
 
 The prototype adds a tool/test-only path before replacing the default JPEG

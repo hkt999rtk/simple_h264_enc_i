@@ -316,6 +316,22 @@ path no longer requires the previous full decoded component planes:
 The production peak includes the dynamically allocated NanoJPEG VLC table block,
 which is now caller-arena-accounted instead of fixed BSS.
 
+Current `2560x1440` 4:2:0 production peak allocation breaks down as:
+
+| Block | Bytes |
+| --- | ---: |
+| Dynamic NanoJPEG VLC tables | 524,288 |
+| Streaming retained row cache | 184,320 |
+| NanoJPEG MCU-row temp buffers | 61,440 |
+| Total tracked peak allocation | 770,048 |
+
+The row streaming work met the decoded-image cache target. The remaining arena
+peak is dominated by the 16-bit VLC lookup tables. The next memory reduction
+step is tracked by issue #31: replace those SRAM tables with compact Huffman
+decode and, optionally, an XIP-friendly standard-Huffman fast path. The target
+is to reduce `2560x1440` 4:2:0 production peak allocation below 270 KiB without
+regressing to full component-plane decode.
+
 ### Current Production Boundary
 
 * Keep the public API unchanged; `sh264e_jpeg_get_work_size` and
