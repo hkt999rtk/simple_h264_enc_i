@@ -299,6 +299,18 @@ encoder slice work buffer, and the H.264 output buffer. The streaming cache
 adds one MCU-row margin beyond the maximum fixed-point source window so slices
 at row-window boundaries can still sample the previous row.
 
+The production memory regression report is tracked in
+`docs/JPEG_STREAMING_MEMORY_REPORT.md`. The measured 4:2:0 arena-backed default
+path no longer requires the previous full decoded component planes:
+
+| Source JPEG | Previous full component planes | Production arena work | Production peak allocation | Streaming row cache |
+| --- | ---: | ---: | ---: | ---: |
+| 1280x720 4:2:0 | 1,382,400 | 616,616 | 616,448 | 61,440 |
+| 2560x1440 4:2:0 | 5,529,600 | 770,216 | 770,048 | 184,320 |
+
+The production peak includes the dynamically allocated NanoJPEG VLC table block,
+which is now caller-arena-accounted instead of fixed BSS.
+
 ### Current Production Boundary
 
 * Keep the public API unchanged; `sh264e_jpeg_get_work_size` and

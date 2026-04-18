@@ -197,6 +197,11 @@ The integration matrix asserts these row-cache values for color JPEG inputs and
 asserts that the streaming path continues to use the same 61,440-byte scaled
 slice work buffer as the component-plane path.
 
+The production memory regression report in
+`docs/JPEG_STREAMING_MEMORY_REPORT.md` records the measured default arena path:
+`1280x720` 4:2:0 uses 616,616 bytes of JPEG work arena and `2560x1440` 4:2:0
+uses 770,216 bytes, including the dynamic NanoJPEG VLC table block.
+
 ## Validation Plan
 
 The prototype adds a tool/test-only path before replacing the default JPEG
