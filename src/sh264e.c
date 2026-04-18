@@ -32,6 +32,7 @@
 #define SH264E_ENCODER_FLAG_IDR_ACTIVE 1u
 #define SH264E_ENCODER_FLAG_OWNS_MEMORY 2u
 #define SH264E_ENCODER_ARENA_ALIGNMENT ((size_t)sizeof(void *))
+#define SH264E_DC_PRED 128
 
 #if !defined(SH264E_DISABLE_ARM_DSP) && defined(__ARM_FEATURE_DSP) && defined(__GNUC__)
 #define SH264E_USE_ARM_DSP 1
@@ -1816,17 +1817,117 @@ static int quantize_dc_delta(int delta, int qp)
     return level;
 }
 
+#if defined(SH264E_USE_ARM_DSP)
+static uint32_t arm_usada8(uint32_t a, uint32_t b, uint32_t acc)
+{
+    uint32_t result;
+    __asm volatile("usada8 %0, %1, %2, %3"
+                   : "=r"(result)
+                   : "r"(a), "r"(b), "r"(acc));
+    return result;
+}
+
+static uint32_t pack_u8x4(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3)
+{
+    return (uint32_t)b0 |
+           ((uint32_t)b1 << 8u) |
+           ((uint32_t)b2 << 16u) |
+           ((uint32_t)b3 << 24u);
+}
+
+#endif
+
 static const uint8_t *slice_luma_row(const sh264e_slice_t *slice, unsigned y)
 {
     return slice->plane[0] + (size_t)y * (size_t)slice->stride[0];
 }
 
-static uint8_t slice_chroma_sample(const sh264e_slice_t *slice, unsigned plane, unsigned x, unsigned y)
+static int luma4x4_sum_delta(const sh264e_slice_t *slice, unsigned src_x, unsigned y)
 {
-    if (slice->pixfmt == SH264E_PIXFMT_I420) {
-        return *(slice->plane[plane] + (size_t)y * (size_t)slice->stride[plane] + x);
+    unsigned row;
+#if defined(SH264E_USE_ARM_DSP)
+    uint32_t sum = 0u;
+
+    for (row = 0; row < 4u; row++) {
+        const uint8_t *src = slice_luma_row(slice, y + row) + src_x;
+        sum = arm_usada8(pack_u8x4(src[0], src[1], src[2], src[3]), 0u, sum);
     }
-    return *(slice->plane[1] + (size_t)y * (size_t)slice->stride[1] + x * 2u + (plane == 1u ? 0u : 1u));
+    return (int)sum - (SH264E_DC_PRED * 16);
+#else
+    unsigned col;
+    int sum_delta = 0;
+
+    for (row = 0; row < 4u; row++) {
+        const uint8_t *src = slice_luma_row(slice, y + row) + src_x;
+        for (col = 0; col < 4u; col++) {
+            sum_delta += (int)src[col] - SH264E_DC_PRED;
+        }
+    }
+    return sum_delta;
+#endif
+}
+
+static uint32_t chroma_i420_sum_u8x8(const sh264e_slice_t *slice,
+                                     unsigned plane,
+                                     unsigned src_x,
+                                     unsigned y)
+{
+    unsigned row;
+    uint32_t sum = 0u;
+
+    for (row = 0; row < 8u; row++) {
+        const uint8_t *src = slice->plane[plane] + (size_t)(y + row) * (size_t)slice->stride[plane] + src_x;
+#if defined(SH264E_USE_ARM_DSP)
+        sum = arm_usada8(pack_u8x4(src[0], src[1], src[2], src[3]), 0u, sum);
+        sum = arm_usada8(pack_u8x4(src[4], src[5], src[6], src[7]), 0u, sum);
+#else
+        unsigned col;
+        for (col = 0; col < 8u; col++) {
+            sum += src[col];
+        }
+#endif
+    }
+    return sum;
+}
+
+static uint32_t chroma_nv12_sum_u8x8(const sh264e_slice_t *slice,
+                                     unsigned plane,
+                                     unsigned src_x,
+                                     unsigned y)
+{
+    const unsigned component_offset = plane == 1u ? 0u : 1u;
+    unsigned row;
+    uint32_t sum = 0u;
+
+    for (row = 0; row < 8u; row++) {
+        const uint8_t *src = slice->plane[1] + (size_t)(y + row) * (size_t)slice->stride[1] +
+                             (size_t)src_x * 2u + component_offset;
+#if defined(SH264E_USE_ARM_DSP)
+        sum = arm_usada8(pack_u8x4(src[0], src[2], src[4], src[6]), 0u, sum);
+        sum = arm_usada8(pack_u8x4(src[8], src[10], src[12], src[14]), 0u, sum);
+#else
+        unsigned col;
+        for (col = 0; col < 8u; col++) {
+            sum += src[(size_t)col * 2u];
+        }
+#endif
+    }
+    return sum;
+}
+
+static int chroma8x8_sum_delta(const sh264e_slice_t *slice,
+                               unsigned plane,
+                               unsigned src_x,
+                               unsigned y)
+{
+    uint32_t sum;
+
+    if (slice->pixfmt == SH264E_PIXFMT_I420) {
+        sum = chroma_i420_sum_u8x8(slice, plane, src_x, y);
+    } else {
+        sum = chroma_nv12_sum_u8x8(slice, plane, src_x, y);
+    }
+    return (int)sum - (SH264E_DC_PRED * 64);
 }
 
 static int encode_luma4x4(sh264e_encoder_t *encoder,
@@ -1835,19 +1936,9 @@ static int encode_luma4x4(sh264e_encoder_t *encoder,
                           unsigned x,
                           unsigned y)
 {
-    unsigned row;
-    unsigned col;
-    int sum_delta = 0;
     const unsigned src_x = mb_x * SH264E_MB_SIZE + x;
-    const int pred = 128;
+    const int sum_delta = luma4x4_sum_delta(slice, src_x, y);
     int level;
-
-    for (row = 0; row < 4u; row++) {
-        const uint8_t *src = slice_luma_row(slice, y + row) + src_x;
-        for (col = 0; col < 4u; col++) {
-            sum_delta += (int)src[col] - pred;
-        }
-    }
 
     level = quantize_dc_delta((sum_delta + (sum_delta >= 0 ? 8 : -8)) / 16, encoder->config.qp);
 
@@ -1861,18 +1952,9 @@ static int encode_chroma8x8_dc(sh264e_encoder_t *encoder,
                                unsigned x,
                                unsigned y)
 {
-    unsigned row;
-    unsigned col;
-    int sum_delta = 0;
-    const int pred = 128;
     int level;
     const unsigned src_x = mb_x * (SH264E_MB_SIZE / 2u) + x;
-
-    for (row = 0; row < 8u; row++) {
-        for (col = 0; col < 8u; col++) {
-            sum_delta += (int)slice_chroma_sample(slice, plane, src_x + col, y + row) - pred;
-        }
-    }
+    const int sum_delta = chroma8x8_sum_delta(slice, plane, src_x, y);
 
     level = quantize_dc_delta((sum_delta + (sum_delta >= 0 ? 32 : -32)) / 64, encoder->config.qp);
     if (level > 0) {

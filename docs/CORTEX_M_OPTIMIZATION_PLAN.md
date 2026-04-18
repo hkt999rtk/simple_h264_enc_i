@@ -96,3 +96,13 @@ default DSP-capable and portable builds. QEMU rows are correctness/preflight
 only. Real-board captures must compare the default DSP-capable and
 `SH264E_DISABLE_ARM_DSP` portable variants before using cycle data for
 optimization decisions.
+
+## H.264 DC Sum Status
+
+The H.264 residual path has a Cortex-M DSP guarded sum path for luma 4x4 and
+chroma 8x8 DC residual inputs. DSP-capable builds use the accumulating
+`USADA8` form of `USAD8` to sum source bytes before subtracting the fixed
+unavailable-neighbor predictor.
+Defining `SH264E_DISABLE_ARM_DSP` keeps the portable C loops, and both paths
+preserve the encoder bitstream checksum. The change adds no encoder-owned
+persistent SRAM.
