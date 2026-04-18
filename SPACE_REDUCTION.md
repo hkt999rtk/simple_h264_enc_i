@@ -238,14 +238,19 @@ arm-none-eabi-size -A nanojpeg.o
 
 | Build mode | `.text` | `.bss` | Notes |
 | --- | ---: | ---: | --- |
-| Static VLC tables, `NJ_DYNAMIC_VLC=0` | 5,988 | 525,032 | Original fixed SRAM model |
-| Dynamic VLC tables, default `NJ_DYNAMIC_VLC=1` | 5,796 | 748 | VLC tables move to tracked JPEG allocation |
+| Static VLC tables, `NJ_DYNAMIC_VLC=0` | 5,920 | 525,036 | Original fixed SRAM model |
+| Dynamic VLC tables, default `NJ_DYNAMIC_VLC=1` | 5,864 | 752 | VLC tables move to tracked JPEG allocation |
 
 The dynamic table block is `4 * 65,536 * sizeof(nj_vlc_code_t)`, currently
 524,288 bytes. This increases per-decode heap/arena work size by that amount,
 but removes it from fixed BSS and makes placement explicit for embedded
 integrations. Builds that prefer the original static allocation/speed tradeoff
 can compile NanoJPEG with `NJ_DYNAMIC_VLC=0`.
+
+Scan startup tracks which DHT/VLC tables were actually decoded and rejects
+abbreviated JPEG input before entropy decoding if SOS references a missing
+table. This keeps malformed missing-DHT streams on the deterministic
+`NJ_SYNTAX_ERROR` path instead of dereferencing uninitialized dynamic tables.
 
 ## Phase 5: MCU-Row Streaming Decode
 

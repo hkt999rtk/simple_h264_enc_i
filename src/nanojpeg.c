@@ -356,6 +356,7 @@ typedef struct _nj_ctx {
     int ncomp;
     nj_component_t comp[3];
     int qtused, qtavail;
+    unsigned char vlctab_avail;
     unsigned char qtab[4][64];
 #if NJ_DYNAMIC_VLC
     nj_vlc_code_t (*vlctab)[NJ_VLC_TABLE_SIZE];
@@ -642,21 +643,21 @@ NJ_INLINE void njDecodeSOF(void) {
 }
 
 NJ_INLINE void njDecodeDHT(void) {
-    int codelen, currcnt, remain, spread, i, j;
+    int codelen, currcnt, remain, spread, table, i, j;
     nj_vlc_code_t *vlc;
     static unsigned char counts[16];
     njDecodeLength();
     njCheckError();
     if (!njEnsureVlcTables()) njThrow(NJ_OUT_OF_MEM);
     while (nj.length >= 17) {
-        i = nj.pos[0];
-        if (i & 0xEC) njThrow(NJ_SYNTAX_ERROR);
-        if (i & 0x02) njThrow(NJ_UNSUPPORTED);
-        i = (i | (i >> 3)) & 3;  // combined DC/AC + tableid value
+        table = nj.pos[0];
+        if (table & 0xEC) njThrow(NJ_SYNTAX_ERROR);
+        if (table & 0x02) njThrow(NJ_UNSUPPORTED);
+        table = (table | (table >> 3)) & 3;  // combined DC/AC + tableid value
         for (codelen = 1;  codelen <= 16;  ++codelen)
             counts[codelen - 1] = nj.pos[codelen];
         njSkip(17);
-        vlc = &nj.vlctab[i][0];
+        vlc = &nj.vlctab[table][0];
         remain = spread = 65536;
         for (codelen = 1;  codelen <= 16;  ++codelen) {
             spread >>= 1;
@@ -679,6 +680,7 @@ NJ_INLINE void njDecodeDHT(void) {
             vlc->bits = 0;
             ++vlc;
         }
+        nj.vlctab_avail |= (unsigned char)(1u << table);
     }
     if (nj.length) njThrow(NJ_SYNTAX_ERROR);
 }
@@ -757,6 +759,8 @@ NJ_INLINE void njDecodeScan(void) {
         if (nj.pos[1] & 0xEE) njThrow(NJ_SYNTAX_ERROR);
         c->dctabsel = nj.pos[1] >> 4;
         c->actabsel = (nj.pos[1] & 1) | 2;
+        if (!(nj.vlctab_avail & (1u << c->dctabsel))) njThrow(NJ_SYNTAX_ERROR);
+        if (!(nj.vlctab_avail & (1u << c->actabsel))) njThrow(NJ_SYNTAX_ERROR);
         njSkip(2);
     }
     if (nj.pos[0] || (nj.pos[1] != 63) || nj.pos[2]) njThrow(NJ_UNSUPPORTED);
