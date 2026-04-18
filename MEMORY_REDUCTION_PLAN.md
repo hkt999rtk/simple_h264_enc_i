@@ -9,15 +9,14 @@ This document is the focused implementation handoff for making MCU-row
 streaming JPEG decode the production path. `SPACE_REDUCTION.md` remains the
 broader DRAM/SRAM history and roadmap.
 
-Public JPEG API shape should remain stable for this work. In particular,
-`sh264e_encode_jpeg_idr_with_arena` should eventually use the streaming path
-internally, while preserving caller-provided arena, slice-work, and output
-buffer ownership.
+Public JPEG API shape should remain stable for this work. All public JPEG entry
+points must use the streaming path internally, while preserving caller-provided
+JPEG input, arena, slice-work, and output ownership where applicable.
 
-## Current Production Memory
+## Historical Full-Component Memory
 
-The production JPEG path currently decodes the complete JPEG image into full
-Y/Cb/Cr component planes, then scales and encodes one H.264 slice at a time:
+The original JPEG path decoded the complete JPEG image into full Y/Cb/Cr
+component planes, then scaled and encoded one H.264 slice at a time:
 
 ```text
 compressed JPEG
@@ -47,8 +46,9 @@ the compressed JPEG input buffer:
 | JPEG/scaler output slice work buffer | 61,440 | Caller-owned |
 | Total | about 6.14 MiB | Excludes compressed JPEG input |
 
-The encoder and scaler are already slice-oriented. The memory problem is the
-full decoded JPEG component frame.
+The encoder and scaler are already slice-oriented. The memory problem was the
+full decoded JPEG component frame. That memory model is now disallowed for every
+public JPEG API, not only for the arena-backed embedded path.
 
 ## Target Production Path
 
@@ -86,10 +86,16 @@ The production API should keep the existing shape:
   point.
 * The caller still owns the JPEG input buffer, JPEG arena, slice-work buffer,
   and H.264 output buffer.
-* `sh264e_encode_jpeg_idr` may remain a heap-backed convenience wrapper.
-* Component-plane decode may remain temporarily for debug or fallback while the
-  streaming matrix is being proven, but the production path should not require
-  full component-frame allocation.
+* `sh264e_encode_jpeg_idr` may remain a heap-backed convenience wrapper for
+  callers that do not need deterministic JPEG arena placement.
+* `sh264e_encode_jpeg_idr_with_arena_stream` remains the embedded
+  streaming-output entry point for avoiding the full H.264 output buffer.
+* All public JPEG entry points must decode JPEG MCU rows into the rolling row
+  cache. No public JPEG API may call a full component-frame decode path or
+  allocate a full-image RGB, grayscale, Y, Cb, or Cr intermediate.
+* Any retained component-plane implementation must be isolated to explicit
+  non-public debug or test code and must not be reachable from public JPEG APIs
+  or production tools.
 
 Supported streaming production scope:
 
@@ -277,6 +283,35 @@ Acceptance criteria:
   for representative fixtures.
 * Strict ffmpeg decode and memory regression tests remain green.
 
+### 8. Public JPEG API Full-Frame Decode Closeout
+
+The arena-backed APIs and production tool path use MCU-row streaming, but the
+heap-backed one-shot wrapper must also share that implementation. The final
+public-API memory contract is:
+
+* `sh264e_encode_jpeg_idr`
+* `sh264e_encode_jpeg_idr_with_arena`
+* `sh264e_encode_jpeg_idr_with_arena_stream`
+
+All three must avoid full decoded JPEG component frames. The difference between
+the APIs is only allocation placement and H.264 output delivery:
+
+| API | JPEG allocation model | H.264 output model |
+| --- | --- | --- |
+| `sh264e_encode_jpeg_idr` | heap-backed streaming row cache | caller-provided complete output buffer |
+| `sh264e_encode_jpeg_idr_with_arena` | caller-provided streaming row-cache arena | caller-provided complete output buffer |
+| `sh264e_encode_jpeg_idr_with_arena_stream` | caller-provided streaming row-cache arena | reusable output chunk + consumer callback |
+
+Acceptance criteria for the closeout:
+
+* Calling `sh264e_encode_jpeg_idr` on a `2560x1440` 4:2:0 JPEG no longer
+  reports the old 5,529,600-byte full component-plane peak.
+* Full component-frame decode is not reachable from any public JPEG API.
+* One-shot and streaming-output bitstreams remain byte-for-byte identical for
+  representative fixtures.
+* Tests fail if any public JPEG API regresses to full decoded component-frame
+  allocation.
+
 ## Test Plan
 
 Documentation-only commit:
@@ -314,6 +349,7 @@ Recommended issue sequence:
 5. `NanoJPEG: reduce static context BSS`
 6. `NanoJPEG: replace 16-bit SRAM VLC tables with compact/XIP Huffman decode`
 7. `JPEG: add streaming H.264 output consumer API`
+8. `JPEG: remove full component-frame decode from public JPEG APIs`
 
 Do not add `help wanted` or `need help` labels unless an issue is actually
 blocked by external hardware or tooling.
@@ -322,7 +358,8 @@ blocked by external hardware or tooling.
 
 * First implementation target is `2560x1440` JPEG 4:2:0.
 * Public JPEG API remains stable.
-* The component-plane path can remain temporarily for debug or fallback.
+* Component-plane decode may exist only as non-public debug or test code.
+* No public JPEG API may touch a full decoded component frame.
 * Compressed JPEG input remains caller-owned and image-size dependent.
 * Encoder state, H.264 output buffers, and slice work buffers are outside the
   decoded-image memory target.

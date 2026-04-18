@@ -352,6 +352,10 @@ or a ring buffer. The reusable output chunk buffer is currently 126,976 bytes.
 * Keep the public API unchanged; `sh264e_jpeg_get_work_size` and
   `sh264e_encode_jpeg_idr_with_arena` now use the streaming row-cache path for
   deterministic arena-backed JPEG encode.
+* The public JPEG memory contract is now stricter: all public JPEG entry
+  points, including the heap-backed `sh264e_encode_jpeg_idr` wrapper, must avoid
+  full decoded component frames. Any retained component-plane code must be
+  non-public debug/test code only.
 * Support baseline sequential grayscale or three-component YCbCr JPEGs within
   the public JPEG source-size policy.
 * Reject progressive/lossless JPEG, arithmetic coding, CMYK/other color spaces,
@@ -362,7 +366,8 @@ or a ring buffer. The reusable output chunk buffer is currently 126,976 bytes.
   grayscale, I420 and NV12 output, and a `cjpeg`-generated DRI/RST
   restart-marker fixture when `cjpeg` is available.
 * Keep the heap-backed convenience wrapper compatible for callers that do not
-  need deterministic JPEG arena placement.
+  need deterministic JPEG arena placement, but make it use the same MCU-row
+  streaming decode model as the arena-backed entry points.
 * Keep the tool-local `--streaming-prototype` path as an internal comparison
   mode while the default arena path exercises the same row-cache bridge.
 
@@ -373,7 +378,9 @@ or a ring buffer. The reusable output chunk buffer is currently 126,976 bytes.
 * Restart interval handling must be preserved.
 * More complex error recovery.
 
-This should be treated as a v2 memory project after component-plane mode is stable.
+This should be treated as a historical stepping stone. Public JPEG APIs should
+no longer use component-plane mode now that MCU-row streaming is the production
+memory model.
 
 ## Recommended Next Commit
 

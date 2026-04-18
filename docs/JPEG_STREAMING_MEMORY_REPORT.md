@@ -37,7 +37,7 @@ decode. Custom DHT baseline JPEGs remain supported.
 ## Output Buffer Boundary
 
 The measurements above separate JPEG decoder/scaler memory from H.264 output
-buffering. The one-shot JPEG API still requires the maximum complete-frame
+buffering. A one-shot JPEG API may still require the maximum complete-frame
 H.264 output capacity:
 
 ```text
@@ -47,9 +47,10 @@ slice count = 90
 max output = 1,024 + 90 * 126,976 = 11,428,864 bytes
 ```
 
-This is a caller-owned output capacity, not JPEG decoder working memory. It is
-much larger than typical encoded output; the measured `2560x1440` JPEG 4:2:0
-fixture currently emits about 123 KiB of H.264 data.
+This is a caller-owned H.264 output capacity, not JPEG decoder working memory,
+and it does not permit full decoded JPEG component-frame allocation. It is much
+larger than typical encoded output; the measured `2560x1440` JPEG 4:2:0 fixture
+currently emits about 123 KiB of H.264 data.
 
 The production JPEG tool path now uses the streaming H.264 output consumer API
 and reuses one caller-owned output chunk buffer sized for `max(header, one
@@ -81,6 +82,12 @@ values for representative JPEG fixtures. It also keeps broader
 color-subsampling coverage that fails if the production arena path regresses to
 full component-plane allocation or if the default JPEG tool path regresses to
 allocating `sh264e_get_max_output_size()` for H.264 output.
+
+The expected closeout is stricter: every public JPEG API, including the
+heap-backed one-shot wrapper, must use MCU-row streaming and must not touch the
+old full decoded component-frame path. Regression coverage should fail if
+`sh264e_encode_jpeg_idr` reports the old 5,529,600-byte `2560x1440` 4:2:0
+component-plane peak.
 
 The expected validation command is:
 

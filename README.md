@@ -126,7 +126,12 @@ The tool sizes a caller-provided JPEG decoder arena with `sh264e_jpeg_get_work_s
 The arena-backed production path now uses MCU-row streaming by default. It keeps only NanoJPEG's current MCU-row buffers and the retained row cache, then feeds one scaled output slice at a time to the progressive encoder.
 The printed peak allocation includes the streaming row cache and MCU-row temp buffers; it excludes caller-owned JPEG input, arena header overhead, slice-work, H.264 output buffers, and NanoJPEG's compact in-context Huffman metadata.
 The hidden `--streaming-prototype` flag remains as a debug/comparison path for the same MCU-row streaming machinery.
-The heap-backed convenience wrapper still exists for non-deterministic host usage, but embedded integrations should prefer the arena-backed entry point.
+All public JPEG entry points must use the MCU-row streaming decode path. The
+heap-backed convenience wrapper may remain non-deterministic in allocation
+placement, but it must not decode the JPEG into a full RGB, grayscale, Y, Cb, or
+Cr component frame. One-shot JPEG APIs may still require a caller-provided
+complete H.264 output buffer; that output model is separate from JPEG decoded
+image memory.
 The JPEG tool uses the streaming H.264 output consumer API for its production arena path, so it writes each SPS/PPS or slice chunk as it is produced instead of allocating `sh264e_get_max_output_size()` bytes for the complete frame. For the current 2560x1440 encoder geometry this replaces the 11,428,864-byte one-shot output capacity with a reusable 126,976-byte output chunk buffer. Embedded callers can use the same API to forward chunks to flash, storage, DMA, or a ring buffer without a full-frame output buffer.
 
 For Cortex-M validation, CMake builds QEMU smoke firmware for M3/M4/M7 when the ARM bare-metal toolchain and QEMU are available. CMake first probes whether `arm-none-eabi-gcc` can compile the library's standard-header usage; if the toolchain is only partially installed, QEMU firmware tests are skipped instead of breaking the host build.

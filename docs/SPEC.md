@@ -311,9 +311,9 @@ The project includes NanoJPEG in the core static library for a direct pipeline:
 ```
 JPEG byte buffer
    ↓
-NanoJPEG baseline decode
+NanoJPEG MCU-row baseline decode
    ↓
-RGB or grayscale source image
+rolling component row cache
    ↓
 Fixed-point bilinear resize into one encoder slice
    ↓
@@ -325,12 +325,23 @@ H.264 IDR slice encode
 ```
 sh264e_jpeg_get_slice_buffer_size
 sh264e_encode_jpeg_idr
+sh264e_encode_jpeg_idr_with_arena
 sh264e_encode_jpeg_idr_with_arena_stream
 ```
 
 The JPEG APIs accept a caller-provided JPEG byte buffer. File I/O remains outside the library.
 
-The one-shot JPEG API writes a complete H.264 IDR frame into a caller-provided output buffer. This API is convenient for host tools, but it may require a worst-case full-frame output buffer.
+All public JPEG APIs must decode through MCU-row streaming and must not allocate
+or depend on a full decoded JPEG component frame. `sh264e_encode_jpeg_idr`,
+`sh264e_encode_jpeg_idr_with_arena`, and
+`sh264e_encode_jpeg_idr_with_arena_stream` differ only in allocation and output
+delivery model; none of them may use a full-image RGB, grayscale, Y, Cb, or Cr
+intermediate.
+
+The one-shot JPEG API writes a complete H.264 IDR frame into a caller-provided
+output buffer. This API is convenient for host tools, but it may require a
+worst-case full H.264 output buffer. That one-shot H.264 output model does not
+permit one-shot JPEG decode into full component planes.
 
 The embedded JPEG API should support streaming H.264 output through a caller-provided consumer callback:
 
