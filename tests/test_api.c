@@ -331,11 +331,11 @@ int main(void)
         ok = 0;
     }
     if (encoder_memory_report.context_bytes != 40u ||
-        encoder_memory_report.bitstream_scratch_bytes != 2048u ||
+        encoder_memory_report.bitstream_scratch_bytes != 256u ||
         encoder_memory_report.recon_luma_bytes != 0u ||
         encoder_memory_report.recon_chroma_bytes != 0u ||
         encoder_memory_report.neighbor_state_bytes != 0u ||
-        encoder_memory_report.total_bytes != 2088u) {
+        encoder_memory_report.total_bytes != 296u) {
         fprintf(stderr,
                 "unexpected encoder memory report: context=%zu bitstream=%zu "
                 "luma=%zu chroma=%zu neighbor=%zu total=%zu\n",

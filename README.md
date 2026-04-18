@@ -170,10 +170,10 @@ path reduces retained row cache to 61,440 bytes and requires 0 bytes of
 caller slice work for I420 or 20,480 bytes for NV12.
 `sh264e_encoder_get_memory_report` reports the fixed-v1 encoder heap breakdown
 without creating an encoder; `docs/ENCODER_MEMORY_REPORT.md` records the current
-2,088-byte total and sub-block composition.
+296-byte total and sub-block composition.
 Embedded integrations can call `sh264e_encoder_get_work_size` and
 `sh264e_encoder_create_with_arena` to place the same encoder state in a
-caller-provided arena. The fixed-v1 arena size is currently 2,095 bytes,
+caller-provided arena. The fixed-v1 arena size is currently 303 bytes,
 including worst-case control-structure alignment padding; `sh264e_encoder_destroy`
 does not free caller-owned arena memory.
 The arena-backed production path now uses MCU-row streaming by default. It keeps only NanoJPEG's current MCU-row buffers and the retained row cache, then feeds one scaled output slice at a time to the progressive encoder.
@@ -185,7 +185,7 @@ placement, but it must not decode the JPEG into a full RGB, grayscale, Y, Cb, or
 Cr component frame. One-shot JPEG APIs may still require a caller-provided
 complete H.264 output buffer; that output model is separate from JPEG decoded
 image memory.
-The JPEG tool uses the streaming H.264 output consumer API for its production arena path, so it flushes the Annex B byte stream as it is produced instead of allocating `sh264e_get_max_output_size()` bytes for the complete frame. For the current 2560x1440 encoder geometry this replaces the 44,295,424-byte one-shot output capacity with a reusable 4,096-byte output chunk buffer. Embedded callers can use the same API to forward chunks to flash, storage, DMA, or a ring buffer without a full-frame or full-slice output buffer.
+The JPEG tool uses the streaming H.264 output consumer API for its production arena path, so it flushes the Annex B byte stream as it is produced instead of allocating `sh264e_get_max_output_size()` bytes for the complete frame. For the current 2560x1440 encoder geometry this replaces the 5,588,224-byte one-shot output capacity with a reusable 4,096-byte output chunk buffer. Embedded callers can use the same API to forward chunks to flash, storage, DMA, or a ring buffer without a full-frame or full-slice output buffer.
 
 For Cortex-M validation, CMake builds QEMU smoke firmware for M3/M4/M7 when the ARM bare-metal toolchain and QEMU are available. CMake first probes whether `arm-none-eabi-gcc` can compile the library's standard-header usage; if the toolchain is only partially installed, QEMU firmware tests are skipped instead of breaking the host build.
 

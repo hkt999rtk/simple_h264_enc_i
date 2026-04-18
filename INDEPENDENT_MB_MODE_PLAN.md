@@ -221,7 +221,7 @@ Memory expectations:
 * encoder neighbor state bytes report as 0 or disappear
 * total encoder arena size drops by about 64,000 bytes before considering any
   bitstream scratch reductions
-* implemented encoder arena size is 2,095 bytes on the current 64-bit host
+* implemented encoder arena size is 303 bytes on the current 64-bit host
 
 ## Non-Goals
 
