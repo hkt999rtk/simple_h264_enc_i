@@ -294,7 +294,7 @@ int main(int argc, char **argv)
         printf("jpeg slice work bytes: %zu\n", work_size);
         printf("jpeg current allocation bytes: %zu\n", stats.current_bytes);
         printf("jpeg peak allocation bytes: %zu\n", stats.peak_bytes);
-        if (streaming_prototype) {
+        if (streaming_prototype || sh264e_jpeg_get_last_streaming_cache_bytes() != 0u) {
             printf("jpeg streaming cache bytes: %zu\n", sh264e_jpeg_get_last_streaming_cache_bytes());
         }
     }

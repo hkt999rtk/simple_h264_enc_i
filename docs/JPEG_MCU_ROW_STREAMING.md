@@ -125,18 +125,20 @@ current prototype keeps it internal and exercises it through
 supported JPEG source-size policy for grayscale and YCbCr inputs, I420 and NV12
 output, and caller-provided arena allocation for the retained row cache.
 
-## Promotion Decision
+## Production Arena Default
 
-The row-window bridge should remain hidden and opt-in instead of becoming the
-production default in this issue. The prototype now closes the main
-production-matrix gaps: dynamic cache sizing, caller-provided arena allocation,
-I420 and NV12 output, grayscale coverage, color subsampling coverage, and
-restart-marker coverage.
+The row-window bridge is now the production implementation for the public
+caller-provided arena entry point, `sh264e_encode_jpeg_idr_with_arena`, and for
+the corresponding `sh264e_jpeg_get_work_size` arena sizing query. The public
+function signatures and caller-owned buffer model remain unchanged: callers
+still provide the compressed JPEG input, a JPEG work arena, one 61,440-byte
+slice work buffer, and the H.264 output buffer.
 
-The default JPEG path still remains the component-plane arena path because it is
-the public API contract today. Streaming should become default only after the
-project decides how to expose the row-window policy outside the tool-local
-`--streaming-prototype` flag.
+The heap-backed convenience wrapper, `sh264e_encode_jpeg_idr`, remains
+compatible for callers that do not need deterministic arena placement. The
+tool-local `--streaming-prototype` flag remains available as an internal
+comparison path while the default arena path exercises the same streaming row
+cache.
 
 ## Memory Estimate
 
@@ -178,9 +180,9 @@ JPEG MCU-row height plus one MCU-row margin. Decoded MCU rows are copied into
 the rolling component cache, and slices are encoded as soon as all source rows
 for the next output slice are available.
 
-The bridge keeps the public JPEG API unchanged and keeps the default
-arena-backed JPEG encode path on the component-plane implementation. Issue #20
-owns switching that production entry point to the streaming bridge.
+The bridge keeps the public JPEG API unchanged. The arena-backed JPEG encode
+path uses this bridge by default, so production arena sizing is based on the
+rolling row cache instead of full decoded component planes.
 
 Measured bridge contract:
 
@@ -214,5 +216,6 @@ encoder:
   full component-plane allocation for 4:2:2 and 4:4:4.
 * When `cjpeg` is available, generate a 4:2:0 fixture with DRI/RST restart
   markers and run the same streaming-vs-component decoded-frame comparison.
-* Keep the component-plane arena path as the production/default path while the
-  row-window bridge remains hidden behind the streaming prototype flag.
+* Confirm the default arena-backed JPEG path reports nonzero streaming
+  row-cache bytes and stays below the full component-plane allocation for the
+  covered color fixtures.

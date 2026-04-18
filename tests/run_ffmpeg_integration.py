@@ -17,6 +17,12 @@ STREAMING_CACHE_BYTES_720P = {
     "yuvj444p": 122_880,
 }
 STREAMING_CACHE_BYTES_1440P_420 = 184_320
+FULL_COMPONENT_BYTES_720P = {
+    "yuvj420p": 1_382_400,
+    "yuvj422p": 1_843_200,
+    "yuvj444p": 2_764_800,
+}
+FULL_COMPONENT_BYTES_1440P_420 = 5_529_600
 
 
 def run(cmd):
@@ -270,7 +276,8 @@ def parse_jpeg_metric(stdout, prefix):
     raise RuntimeError(f"JPEG encoder did not report {prefix!r}: {stdout!r}")
 
 
-def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None):
+def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
+                expected_cache_bytes=None, max_peak_bytes=None):
     command = [args.jpeg_encoder]
     if extra_args:
         command.extend(extra_args)
@@ -288,6 +295,17 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None):
     peak = parse_jpeg_metric(result.stdout, "jpeg peak allocation bytes:")
     if peak == 0:
         raise RuntimeError(f"JPEG encoder reported zero peak allocation bytes: {result.stdout!r}")
+    cache = parse_jpeg_metric(result.stdout, "jpeg streaming cache bytes:")
+    if cache == 0:
+        raise RuntimeError(f"JPEG encoder default path did not report streaming cache bytes: {result.stdout!r}")
+    if expected_cache_bytes is not None and cache != expected_cache_bytes:
+        raise RuntimeError(
+            f"JPEG encoder default row cache changed for {jpeg_input}: got {cache}, expected {expected_cache_bytes}"
+        )
+    if max_peak_bytes is not None and peak >= max_peak_bytes:
+        raise RuntimeError(
+            f"JPEG encoder default path used full component-plane memory: got peak {peak}, limit {max_peak_bytes}"
+        )
 
 
 def encode_jpeg_streaming_prototype(args, fmt, jpeg_input, bitstream, expected_cache_bytes=None):
@@ -426,12 +444,16 @@ def main():
             ], stderr_contains="buffer too small")
             offset_arena_output = workdir / "output_jpeg_arena_offset_i420.h264"
             encode_jpeg(args, "i420", jpeg_input, offset_arena_output,
-                        ["--test-arena-offset", "1"])
+                        ["--test-arena-offset", "1"],
+                        STREAMING_CACHE_BYTES_720P[pix_fmt],
+                        FULL_COMPONENT_BYTES_720P[pix_fmt])
             validate_bitstream(args.ffprobe, args.ffmpeg, offset_arena_output)
         for fmt in ("i420", "nv12"):
             jpeg_output = workdir / f"output_jpeg_{pix_fmt}_{fmt}.h264"
             streaming_output = workdir / f"output_jpeg_streaming_{pix_fmt}_{fmt}.h264"
-            encode_jpeg(args, fmt, jpeg_input, jpeg_output)
+            encode_jpeg(args, fmt, jpeg_input, jpeg_output,
+                        expected_cache_bytes=STREAMING_CACHE_BYTES_720P[pix_fmt],
+                        max_peak_bytes=FULL_COMPONENT_BYTES_720P[pix_fmt])
             encode_jpeg_streaming_prototype(args, fmt, jpeg_input, streaming_output,
                                             STREAMING_CACHE_BYTES_720P[pix_fmt])
             validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
@@ -443,7 +465,9 @@ def main():
     large_jpeg_output = workdir / "output_jpeg_1440p_yuvj420p_i420.h264"
     large_streaming_output = workdir / "output_jpeg_streaming_1440p_yuvj420p_i420.h264"
     make_color_jpeg_sized(args, large_jpeg_input, "yuvj420p", LARGE_WIDTH, LARGE_HEIGHT)
-    encode_jpeg(args, "i420", large_jpeg_input, large_jpeg_output)
+    encode_jpeg(args, "i420", large_jpeg_input, large_jpeg_output,
+                expected_cache_bytes=STREAMING_CACHE_BYTES_1440P_420,
+                max_peak_bytes=FULL_COMPONENT_BYTES_1440P_420)
     encode_jpeg_streaming_prototype(args, "i420", large_jpeg_input, large_streaming_output,
                                     STREAMING_CACHE_BYTES_1440P_420)
     validate_bitstream(args.ffprobe, args.ffmpeg, large_streaming_output)
@@ -458,7 +482,9 @@ def main():
         encode_jpeg_streaming_prototype(args, "i420", restart_jpeg_input, restart_streaming_output,
                                         STREAMING_CACHE_BYTES_720P["yuvj420p"])
         validate_bitstream(args.ffprobe, args.ffmpeg, restart_streaming_output)
-        encode_jpeg(args, "i420", restart_jpeg_input, restart_jpeg_output)
+        encode_jpeg(args, "i420", restart_jpeg_input, restart_jpeg_output,
+                    expected_cache_bytes=STREAMING_CACHE_BYTES_720P["yuvj420p"],
+                    max_peak_bytes=FULL_COMPONENT_BYTES_720P["yuvj420p"])
         validate_bitstream(args.ffprobe, args.ffmpeg, restart_jpeg_output)
         compare_decoded_i420(args, restart_jpeg_output, restart_streaming_output,
                              "output_jpeg_yuvj420p_restart_i420_streaming_compare")
