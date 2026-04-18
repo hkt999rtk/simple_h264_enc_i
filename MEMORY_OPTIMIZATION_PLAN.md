@@ -216,6 +216,7 @@ cmake -S . -B build-prod \
   -DSH264E_BUILD_TESTS=OFF \
   -DSH264E_ENABLE_JPEG_TEST_HOOKS=OFF
 cmake --build build-prod
+nm -g build-prod/libsimple_h264_enc_i.a | rg "sh264e_jpeg_set_test|streaming_prototype|njDecode([^A-Za-z0-9_]|$)|njDecodeComponents|njGetImage|njGetImageSize|njIsColor" && exit 1 || true
 ```
 
 Acceptance focus:
@@ -224,6 +225,8 @@ Acceptance focus:
 * NanoJPEG full-image decode remains disabled.
 * Public diagnostics are intentionally documented.
 * Production build command and symbol-inspection command are documented.
+* `sh264e_production_profile_symbols` validates the profile during normal CTest
+  when `nm` or `llvm-nm` is available.
 
 ## Validation Baseline
 

@@ -171,6 +171,20 @@ if(SH264E_BUILD_TESTS)
             -DSH264E_PROJECT_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_jpeg_diagnostics_boundary.cmake
     )
+    find_program(SH264E_NM nm llvm-nm)
+    if(SH264E_NM)
+        add_test(
+            NAME sh264e_production_profile_symbols
+            COMMAND ${CMAKE_COMMAND}
+                -DSH264E_PROJECT_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DSH264E_PRODUCTION_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/production_profile
+                -DSH264E_NM=${SH264E_NM}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_production_profile_symbols.cmake
+        )
+        set_tests_properties(sh264e_production_profile_symbols PROPERTIES TIMEOUT 60)
+    else()
+        message(STATUS "Skipping production profile symbol test: nm or llvm-nm was not found")
+    endif()
 
     find_package(Python3 COMPONENTS Interpreter)
     find_program(SH264E_FFPROBE ffprobe)
