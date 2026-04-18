@@ -226,6 +226,10 @@ int main(void)
         fprintf(stderr, "initial JPEG allocation stats should be zero\n");
         ok = 0;
     }
+    if (sh264e_jpeg_get_last_slice_work_bytes() != 0u) {
+        fprintf(stderr, "initial JPEG effective slice work should be zero\n");
+        ok = 0;
+    }
 
     status = sh264e_encoder_create(&config, &encoder);
     ok &= expect_status("create encoder", status, SH264E_OK);

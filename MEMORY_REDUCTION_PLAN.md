@@ -72,8 +72,8 @@ Target decoded-image working memory for `2560x1440` 4:2:0:
 | Path | Decoded-image working memory |
 | --- | ---: |
 | Current full component planes | 5,529,600 |
-| Target MCU-row streaming cache | about 184,320 |
-| Expected reduction | about 5.10 MiB |
+| MCU-row streaming cache after 1:1 fast path | 61,440 |
+| Expected reduction | about 5.21 MiB |
 
 The target excludes compressed JPEG input, encoder state, H.264 output buffers,
 and the existing 61,440-byte output slice work buffer.
@@ -147,9 +147,11 @@ Implemented bridge contract:
   geometry and the scaler's per-slice source row window.
 * The integration matrix asserts exact row-cache bytes for color JPEG inputs:
   61,440 bytes for 1280x720 4:2:0, 81,920 bytes for 1280x720 4:2:2,
-  122,880 bytes for 1280x720 4:4:4, and 184,320 bytes for 2560x1440 4:2:0.
+  122,880 bytes for 1280x720 4:4:4, and 61,440 bytes for the 2560x1440 4:2:0
+  1:1 fast path.
 * The JPEG tool and integration matrix also assert the scaled output slice work
-  buffer remains 61,440 bytes.
+  buffer remains 61,440 bytes. For the 1:1 fast path, effective slice staging
+  is 0 bytes for I420 and 20,480 bytes for NV12.
 
 ### 3. Production API Switch
 
@@ -214,10 +216,10 @@ a configurable small fast table. With default `NJ_VLC_FAST_BITS=8`, the
 `2560x1440` 4:2:0 production peak is now:
 
 ```text
-184,320 bytes  streaming retained row cache
+ 61,440 bytes  streaming retained row cache
  61,440 bytes  NanoJPEG MCU-row temp buffers
 ----------
-245,760 bytes  tracked peak allocation
+122,880 bytes  tracked peak allocation
 ```
 
 Implemented direction:
@@ -230,8 +232,8 @@ Implemented direction:
 
 Acceptance criteria:
 
-* `2560x1440` 4:2:0 production peak allocation is 245,760 bytes, below 270 KiB.
-* `jpeg streaming cache bytes` remains 184,320.
+* `2560x1440` 4:2:0 production peak allocation is 122,880 bytes, below 270 KiB.
+* `jpeg streaming cache bytes` is 61,440 for the 1:1 fast path.
 * Production encode does not regress to the old 5,529,600-byte full
   component-plane allocation.
 * Strict ffmpeg decode and full CTest remain green.
@@ -267,12 +269,12 @@ Memory target for `2560x1440` JPEG 4:2:0 embedded path:
 
 | Area | Bytes |
 | --- | ---: |
-| JPEG work arena | 245,904 |
+| JPEG work arena | 123,024 |
 | JPEG/scaler slice work | 61,440 |
 | Reusable H.264 output chunk buffer | 4,096 |
 | Encoder heap | about 191,024 |
 | Static mutable RAM | about 4,529 |
-| Total, excluding compressed JPEG input and `.rodata` | about 510 KiB budget class |
+| Total, excluding compressed JPEG input and `.rodata` | about 390 KiB budget class |
 
 Acceptance criteria:
 

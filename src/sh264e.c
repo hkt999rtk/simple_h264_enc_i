@@ -100,9 +100,11 @@ typedef struct sh264e_jpeg_stream_context_t {
     sh264e_output_consumer_t consumer;
     void *consumer_user;
     size_t cache_bytes;
+    size_t effective_slice_work_bytes;
     unsigned next_slice;
     unsigned idr_started;
     int component_count;
+    int one_to_one_420;
     int measure_only;
     int initialized;
     sh264e_status_t status;
@@ -140,6 +142,7 @@ static sh264e_jpeg_alloc_mode_t sh264e_jpeg_alloc_mode = SH264E_JPEG_ALLOC_HEAP;
 static uint8_t *sh264e_jpeg_alloc_arena;
 static size_t sh264e_jpeg_alloc_arena_capacity;
 static size_t sh264e_jpeg_streaming_last_cache_bytes;
+static size_t sh264e_jpeg_streaming_last_slice_work_bytes;
 
 static void reset_progressive_state(sh264e_encoder_t *encoder);
 static sh264e_status_t sh264e_begin_idr_to_consumer(sh264e_encoder_t *encoder,
@@ -779,30 +782,72 @@ static uint32_t streaming_cache_rows_for_slice_window(uint32_t src_height,
     return max_rows + rows_per_mcu;
 }
 
+static int streaming_is_one_to_one_420(void)
+{
+    if (njGetComponentCount() != 3 ||
+        njGetWidth() != (int)SH264E_V1_WIDTH ||
+        njGetHeight() != (int)SH264E_V1_HEIGHT) {
+        return 0;
+    }
+    return njGetComponentWidth(0) == (int)SH264E_V1_WIDTH &&
+           njGetComponentHeight(0) == (int)SH264E_V1_HEIGHT &&
+           njGetComponentWidth(1) == (int)SH264E_CHROMA_WIDTH &&
+           njGetComponentHeight(1) == (int)(SH264E_V1_HEIGHT / 2u) &&
+           njGetComponentWidth(2) == (int)SH264E_CHROMA_WIDTH &&
+           njGetComponentHeight(2) == (int)(SH264E_V1_HEIGHT / 2u) &&
+           njGetComponentSsx(0) == 2 &&
+           njGetComponentSsy(0) == 2 &&
+           njGetComponentSsx(1) == 1 &&
+           njGetComponentSsy(1) == 1 &&
+           njGetComponentSsx(2) == 1 &&
+           njGetComponentSsy(2) == 1;
+}
+
+static void streaming_direct_source_range(unsigned component_index,
+                                          unsigned slice_index,
+                                          uint32_t *out_min_y,
+                                          uint32_t *out_max_y)
+{
+    const uint32_t rows = component_index == 0u ? SH264E_V1_SLICE_LUMA_HEIGHT :
+                                                 SH264E_V1_SLICE_CHROMA_HEIGHT;
+    const uint32_t min_y = (uint32_t)slice_index * rows;
+
+    *out_min_y = min_y;
+    *out_max_y = min_y + rows - 1u;
+}
+
 static int streaming_slice_available(const sh264e_jpeg_stream_context_t *ctx, unsigned slice_index)
 {
     uint32_t min_y;
     uint32_t max_y;
     unsigned i;
 
-    streaming_source_range(ctx->components[0].height,
-                           SH264E_V1_HEIGHT,
-                           slice_index * SH264E_V1_SLICE_LUMA_HEIGHT,
-                           SH264E_V1_SLICE_LUMA_HEIGHT,
-                           &min_y,
-                           &max_y);
+    if (ctx->one_to_one_420) {
+        streaming_direct_source_range(0u, slice_index, &min_y, &max_y);
+    } else {
+        streaming_source_range(ctx->components[0].height,
+                               SH264E_V1_HEIGHT,
+                               slice_index * SH264E_V1_SLICE_LUMA_HEIGHT,
+                               SH264E_V1_SLICE_LUMA_HEIGHT,
+                               &min_y,
+                               &max_y);
+    }
     if (min_y < ctx->components[0].row0 ||
         max_y >= ctx->components[0].row0 + ctx->components[0].rows) {
         return 0;
     }
 
     for (i = 1u; i < (unsigned)ctx->component_count; i++) {
-        streaming_source_range(ctx->components[i].height,
-                               SH264E_V1_HEIGHT / 2u,
-                               slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT,
-                               SH264E_V1_SLICE_CHROMA_HEIGHT,
-                               &min_y,
-                               &max_y);
+        if (ctx->one_to_one_420) {
+            streaming_direct_source_range(i, slice_index, &min_y, &max_y);
+        } else {
+            streaming_source_range(ctx->components[i].height,
+                                   SH264E_V1_HEIGHT / 2u,
+                                   slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT,
+                                   SH264E_V1_SLICE_CHROMA_HEIGHT,
+                                   &min_y,
+                                   &max_y);
+        }
         if (min_y < ctx->components[i].row0 ||
             max_y >= ctx->components[i].row0 + ctx->components[i].rows) {
             return 0;
@@ -818,6 +863,25 @@ static void streaming_make_i420_slice(const sh264e_jpeg_stream_context_t *ctx,
     uint8_t *dst_y = ctx->work_buffer;
     uint8_t *dst_u = dst_y + (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_LUMA_HEIGHT;
     uint8_t *dst_v = dst_u + (size_t)SH264E_CHROMA_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT;
+
+    memset(slice, 0, sizeof(*slice));
+    slice->pixfmt = SH264E_PIXFMT_I420;
+
+    if (ctx->one_to_one_420) {
+        const sh264e_jpeg_stream_component_t *y = &ctx->components[0];
+        const sh264e_jpeg_stream_component_t *cb = &ctx->components[1];
+        const sh264e_jpeg_stream_component_t *cr = &ctx->components[2];
+        const uint32_t luma_row = (uint32_t)slice_index * SH264E_V1_SLICE_LUMA_HEIGHT;
+        const uint32_t chroma_row = (uint32_t)slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT;
+
+        slice->plane[0] = y->pixels + (size_t)(luma_row - y->row0) * (size_t)y->stride;
+        slice->plane[1] = cb->pixels + (size_t)(chroma_row - cb->row0) * (size_t)cb->stride;
+        slice->plane[2] = cr->pixels + (size_t)(chroma_row - cr->row0) * (size_t)cr->stride;
+        slice->stride[0] = y->stride;
+        slice->stride[1] = cb->stride;
+        slice->stride[2] = cr->stride;
+        return;
+    }
 
     streaming_scale_component_slice(&ctx->components[0], dst_y,
                                     SH264E_V1_WIDTH, SH264E_V1_HEIGHT,
@@ -839,8 +903,6 @@ static void streaming_make_i420_slice(const sh264e_jpeg_stream_context_t *ctx,
                                         SH264E_CHROMA_WIDTH);
     }
 
-    memset(slice, 0, sizeof(*slice));
-    slice->pixfmt = SH264E_PIXFMT_I420;
     slice->plane[0] = dst_y;
     slice->plane[1] = dst_u;
     slice->plane[2] = dst_v;
@@ -849,12 +911,53 @@ static void streaming_make_i420_slice(const sh264e_jpeg_stream_context_t *ctx,
     slice->stride[2] = SH264E_CHROMA_WIDTH;
 }
 
+static void streaming_interleave_direct_nv12_chroma_slice(const sh264e_jpeg_stream_context_t *ctx,
+                                                          unsigned slice_index,
+                                                          uint8_t *dst_uv)
+{
+    const sh264e_jpeg_stream_component_t *cb = &ctx->components[1];
+    const sh264e_jpeg_stream_component_t *cr = &ctx->components[2];
+    const uint32_t chroma_row = (uint32_t)slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT;
+    const uint8_t *src_cb = cb->pixels + (size_t)(chroma_row - cb->row0) * (size_t)cb->stride;
+    const uint8_t *src_cr = cr->pixels + (size_t)(chroma_row - cr->row0) * (size_t)cr->stride;
+    uint32_t y;
+
+    for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
+        const uint8_t *row_cb = src_cb + (size_t)y * (size_t)cb->stride;
+        const uint8_t *row_cr = src_cr + (size_t)y * (size_t)cr->stride;
+        uint8_t *row = dst_uv + (size_t)y * SH264E_V1_WIDTH;
+        uint32_t x;
+
+        for (x = 0; x < SH264E_CHROMA_WIDTH; x++) {
+            row[(size_t)x * 2u] = row_cb[x];
+            row[(size_t)x * 2u + 1u] = row_cr[x];
+        }
+    }
+}
+
 static void streaming_make_nv12_slice(const sh264e_jpeg_stream_context_t *ctx,
                                       unsigned slice_index,
                                       sh264e_slice_t *slice)
 {
     uint8_t *dst_y = ctx->work_buffer;
     uint8_t *dst_uv = dst_y + (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_LUMA_HEIGHT;
+
+    memset(slice, 0, sizeof(*slice));
+    slice->pixfmt = SH264E_PIXFMT_NV12;
+
+    if (ctx->one_to_one_420) {
+        const sh264e_jpeg_stream_component_t *y = &ctx->components[0];
+        const uint32_t luma_row = (uint32_t)slice_index * SH264E_V1_SLICE_LUMA_HEIGHT;
+
+        dst_uv = ctx->work_buffer;
+        streaming_interleave_direct_nv12_chroma_slice(ctx, slice_index, dst_uv);
+
+        slice->plane[0] = y->pixels + (size_t)(luma_row - y->row0) * (size_t)y->stride;
+        slice->plane[1] = dst_uv;
+        slice->stride[0] = y->stride;
+        slice->stride[1] = SH264E_V1_WIDTH;
+        return;
+    }
 
     streaming_scale_component_slice(&ctx->components[0], dst_y,
                                     SH264E_V1_WIDTH, SH264E_V1_HEIGHT,
@@ -869,8 +972,6 @@ static void streaming_make_nv12_slice(const sh264e_jpeg_stream_context_t *ctx,
                                                     slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT);
     }
 
-    memset(slice, 0, sizeof(*slice));
-    slice->pixfmt = SH264E_PIXFMT_NV12;
     slice->plane[0] = dst_y;
     slice->plane[1] = dst_uv;
     slice->stride[0] = SH264E_V1_WIDTH;
@@ -921,6 +1022,14 @@ static sh264e_status_t streaming_init_cache(sh264e_jpeg_stream_context_t *ctx)
         }
     }
     ctx->component_count = component_count;
+    ctx->one_to_one_420 = streaming_is_one_to_one_420();
+    ctx->effective_slice_work_bytes = resize_scaled_slice_buffer_size();
+    if (ctx->one_to_one_420) {
+        ctx->effective_slice_work_bytes =
+            ctx->encoder != NULL && ctx->encoder->config.pixfmt == SH264E_PIXFMT_NV12
+                ? (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT
+                : 0u;
+    }
 
     for (i = 0u; i < (unsigned)component_count; i++) {
         sh264e_jpeg_stream_component_t *component = &ctx->components[i];
@@ -939,11 +1048,14 @@ static sh264e_status_t streaming_init_cache(sh264e_jpeg_stream_context_t *ctx)
         component->rows_per_mcu = (uint32_t)rows_per_mcu;
         component->row0 = 0u;
         component->rows = 0u;
-        component->cache_rows = streaming_cache_rows_for_slice_window(
-            component->height,
-            i == 0u ? SH264E_V1_HEIGHT : SH264E_V1_HEIGHT / 2u,
-            i == 0u ? SH264E_V1_SLICE_LUMA_HEIGHT : SH264E_V1_SLICE_CHROMA_HEIGHT,
-            component->rows_per_mcu);
+        component->cache_rows = ctx->one_to_one_420
+                                    ? component->rows_per_mcu
+                                    : streaming_cache_rows_for_slice_window(
+                                          component->height,
+                                          i == 0u ? SH264E_V1_HEIGHT : SH264E_V1_HEIGHT / 2u,
+                                          i == 0u ? SH264E_V1_SLICE_LUMA_HEIGHT :
+                                                    SH264E_V1_SLICE_CHROMA_HEIGHT,
+                                          component->rows_per_mcu);
         bytes = (size_t)stride * (size_t)component->cache_rows;
         if (bytes > (size_t)INT_MAX) {
             streaming_free_cache(ctx);
@@ -2158,6 +2270,7 @@ static sh264e_status_t jpeg_get_streaming_work_size(const uint8_t *jpeg_data,
     }
     *out_size = 0u;
     sh264e_jpeg_streaming_last_cache_bytes = 0u;
+    sh264e_jpeg_streaming_last_slice_work_bytes = 0u;
     if (jpeg_size == 0u || jpeg_size > (size_t)INT_MAX) {
         return SH264E_ERR_INVALID_ARGUMENT;
     }
@@ -2264,6 +2377,11 @@ size_t sh264e_jpeg_get_last_streaming_cache_bytes(void)
     return sh264e_jpeg_streaming_last_cache_bytes;
 }
 
+size_t sh264e_jpeg_get_last_slice_work_bytes(void)
+{
+    return sh264e_jpeg_streaming_last_slice_work_bytes;
+}
+
 static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *encoder,
                                                              const uint8_t *jpeg_data,
                                                              size_t jpeg_size,
@@ -2288,6 +2406,7 @@ static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *e
     }
     *out_size = 0u;
     sh264e_jpeg_streaming_last_cache_bytes = 0u;
+    sh264e_jpeg_streaming_last_slice_work_bytes = 0u;
     if (encoder->idr_active != 0u) {
         return SH264E_ERR_BAD_STATE;
     }
@@ -2340,6 +2459,7 @@ static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *e
         reset_progressive_state(encoder);
     }
     sh264e_jpeg_streaming_last_cache_bytes = ctx.cache_bytes;
+    sh264e_jpeg_streaming_last_slice_work_bytes = ctx.effective_slice_work_bytes;
     streaming_free_cache(&ctx);
     njDone();
     jpeg_allocation_end();

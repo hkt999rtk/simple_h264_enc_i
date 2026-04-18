@@ -11,12 +11,14 @@ SMALL_HEIGHT = 720
 LARGE_WIDTH = 2560
 LARGE_HEIGHT = 1440
 JPEG_SLICE_WORK_BYTES = WIDTH * 16 + (WIDTH // 2) * 8 * 2
+JPEG_DIRECT_I420_EFFECTIVE_SLICE_WORK_BYTES = 0
+JPEG_DIRECT_NV12_EFFECTIVE_SLICE_WORK_BYTES = WIDTH * 8
 STREAMING_CACHE_BYTES_720P = {
     "yuvj420p": 61_440,
     "yuvj422p": 81_920,
     "yuvj444p": 122_880,
 }
-STREAMING_CACHE_BYTES_1440P_420 = 184_320
+STREAMING_CACHE_BYTES_1440P_420 = 61_440
 FULL_COMPONENT_BYTES_720P = {
     "yuvj420p": 1_382_400,
     "yuvj422p": 1_843_200,
@@ -29,8 +31,8 @@ PRODUCTION_MEMORY_720P_420 = {
     "cache": STREAMING_CACHE_BYTES_720P["yuvj420p"],
 }
 PRODUCTION_MEMORY_1440P_420 = {
-    "work": 245_904,
-    "peak": 245_760,
+    "work": 123_024,
+    "peak": 122_880,
     "cache": STREAMING_CACHE_BYTES_1440P_420,
 }
 H264_OUTPUT_CONSUMER_CHUNKS_MIN = 1 + 90
@@ -299,7 +301,8 @@ def parse_jpeg_metric(stdout, prefix):
 
 def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
                 expected_cache_bytes=None, max_peak_bytes=None,
-                expected_work_bytes=None, expected_peak_bytes=None):
+                expected_work_bytes=None, expected_peak_bytes=None,
+                expected_effective_slice_work_bytes=None):
     command = [args.jpeg_encoder]
     if extra_args:
         command.extend(extra_args)
@@ -321,6 +324,14 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
     if slice_work != JPEG_SLICE_WORK_BYTES:
         raise RuntimeError(
             f"JPEG encoder slice work changed: got {slice_work}, expected {JPEG_SLICE_WORK_BYTES}"
+        )
+    effective_slice_work = parse_jpeg_metric(result.stdout, "jpeg effective slice work bytes:")
+    if expected_effective_slice_work_bytes is None:
+        expected_effective_slice_work_bytes = JPEG_SLICE_WORK_BYTES
+    if effective_slice_work != expected_effective_slice_work_bytes:
+        raise RuntimeError(
+            "JPEG encoder effective slice work changed: "
+            f"got {effective_slice_work}, expected {expected_effective_slice_work_bytes}"
         )
     peak = parse_jpeg_metric(result.stdout, "jpeg peak allocation bytes:")
     if peak == 0:
@@ -608,20 +619,30 @@ def main():
                 expected_cache_bytes=STREAMING_CACHE_BYTES_1440P_420,
                 max_peak_bytes=FULL_COMPONENT_BYTES_1440P_420,
                 expected_work_bytes=PRODUCTION_MEMORY_1440P_420["work"],
-                expected_peak_bytes=PRODUCTION_MEMORY_1440P_420["peak"])
+                expected_peak_bytes=PRODUCTION_MEMORY_1440P_420["peak"],
+                expected_effective_slice_work_bytes=JPEG_DIRECT_I420_EFFECTIVE_SLICE_WORK_BYTES)
+    large_jpeg_output_nv12 = workdir / "output_jpeg_1440p_yuvj420p_nv12.h264"
+    encode_jpeg(args, "nv12", large_jpeg_input, large_jpeg_output_nv12,
+                expected_cache_bytes=STREAMING_CACHE_BYTES_1440P_420,
+                max_peak_bytes=FULL_COMPONENT_BYTES_1440P_420,
+                expected_work_bytes=PRODUCTION_MEMORY_1440P_420["work"],
+                expected_peak_bytes=PRODUCTION_MEMORY_1440P_420["peak"],
+                expected_effective_slice_work_bytes=JPEG_DIRECT_NV12_EFFECTIVE_SLICE_WORK_BYTES)
+    validate_bitstream(args.ffprobe, args.ffmpeg, large_jpeg_output_nv12)
     large_heap_wrapper_output = workdir / "output_jpeg_heap_wrapper_1440p_yuvj420p_i420.h264"
     encode_jpeg(args, "i420", large_jpeg_input, large_heap_wrapper_output,
                 ["--test-allocation-limit", "999999999"],
                 expected_cache_bytes=STREAMING_CACHE_BYTES_1440P_420,
                 max_peak_bytes=FULL_COMPONENT_BYTES_1440P_420,
-                expected_peak_bytes=PRODUCTION_MEMORY_1440P_420["peak"])
+                expected_peak_bytes=PRODUCTION_MEMORY_1440P_420["peak"],
+                expected_effective_slice_work_bytes=JPEG_DIRECT_I420_EFFECTIVE_SLICE_WORK_BYTES)
     validate_bitstream(args.ffprobe, args.ffmpeg, large_heap_wrapper_output)
     if large_heap_wrapper_output.read_bytes() != large_jpeg_output.read_bytes():
         raise RuntimeError("JPEG heap wrapper bitstream differs from arena streaming output")
-    if EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420 != 311_440:
+    if EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420 != 188_560:
         raise RuntimeError(
             "2560x1440 JPEG streaming memory subtotal changed: "
-            f"got {EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420}, expected 311440"
+            f"got {EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420}, expected 188560"
         )
     encode_jpeg_streaming_prototype(args, "i420", large_jpeg_input, large_streaming_output,
                                     STREAMING_CACHE_BYTES_1440P_420)

@@ -31,7 +31,8 @@ compressed JPEG byte buffer
 -> parse JPEG headers
 -> decode one MCU row into NanoJPEG temporary component rows
 -> copy the MCU row into a rolling component row cache
--> scale the available source row window into one 2560x16 encoder slice
+-> scale the available source row window into one 2560x16 encoder slice,
+   or use the 2560x1440 4:2:0 1:1 direct path
 -> encode one H.264 IDR slice
 -> repeat until all 90 H.264 slices are emitted
 ```
@@ -94,6 +95,12 @@ window for the next output slice is available, the integration layer scales one
 YUV420 slice into the caller-provided 61,440-byte slice work buffer and calls
 `sh264e_encode_idr_slice`.
 
+For `2560x1440` 4:2:0 source JPEGs encoded to the fixed `2560x1440` target,
+the pipeline uses a 1:1 fast path. It keeps exactly one MCU row per component,
+feeds I420 slices directly from the retained cache, and only stages the 8-row
+interleaved chroma window required for NV12 output. Non-1:1 sources keep the
+general bilinear scaler cache and slice-work behavior.
+
 ## Memory Contract
 
 Historical full component-plane decoded-image sizes were:
@@ -113,14 +120,14 @@ image height:
 | 1280x720 4:2:0 | 61,440 | 61,440 |
 | 1280x720 4:2:2 | 81,920 | 61,440 |
 | 1280x720 4:4:4 | 122,880 | 61,440 |
-| 2560x1440 4:2:0 | 184,320 | 61,440 |
+| 2560x1440 4:2:0, 1:1 fast path | 61,440 | 61,440 API capacity; effective I420 0, NV12 20,480 |
 
 For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
-`.rodata`, the current planning budget is about 510 KiB:
+`.rodata`, the current planning budget is about 390 KiB:
 
 | Block | Bytes |
 | --- | ---: |
-| JPEG work arena | 245,904 |
+| JPEG work arena | 123,024 |
 | JPEG/scaler slice work | 61,440 |
 | Reusable H.264 output chunk buffer | 4,096 |
 | Encoder heap | about 191,024 |
@@ -136,6 +143,7 @@ The normal public diagnostic surface includes:
 
 * `sh264e_jpeg_get_last_allocation_stats`
 * `sh264e_jpeg_get_last_streaming_cache_bytes`
+* `sh264e_jpeg_get_last_slice_work_bytes`
 
 Private regression hooks such as allocation-limit fault injection and the
 streaming prototype entry points are declared in
