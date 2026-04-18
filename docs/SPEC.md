@@ -433,7 +433,7 @@ capacity retained by the last MCU-row streaming query or encode call.
 `sh264e_jpeg_source_get_slice_work_size` report the path-specific caller
 work-buffer capacity for a specific JPEG input and output pixel format. This
 lets embedded callers use zero slice-work bytes for the `2560x1440` 4:2:0 1:1
-I420 path and 20,480 bytes for the equivalent NV12 path, while
+I420 and NV12 paths, while
 `sh264e_jpeg_get_slice_buffer_size` remains a conservative worst-case query.
 `sh264e_jpeg_get_last_slice_work_bytes` reports the effective slice staging used
 by the last JPEG encode. These are diagnostic/stat APIs for regression reporting; allocation-limit and
@@ -479,11 +479,12 @@ NanoJPEG decodes baseline JPEG through MCU-row streaming. The library scales dec
 
 For `2560x1440` 4:2:0 source JPEGs encoded to the fixed target, the JPEG path
 uses a 1:1 fast path. It skips bilinear scaling, keeps one MCU row per
-component, feeds I420 slices directly from the retained rows, and stages only
-the 20,480-byte interleaved UV window needed for NV12.
+component, and feeds slices directly from the retained rows without a
+caller-provided slice-work buffer.
 
-* I420 encoder config: Y, U, and V slice planes
-* NV12 encoder config: Y and interleaved UV slice planes
+* I420 JPEG path: Y, U, and V retained rows
+* NV12 JPEG path: Y, Cb, and Cr retained rows through the internal streaming
+  bridge; the public NV12 slice API remains Y plus interleaved UV
 
 The JPEG source dimensions must satisfy the same resize limits:
 

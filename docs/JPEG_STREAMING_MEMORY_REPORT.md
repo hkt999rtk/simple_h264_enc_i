@@ -14,7 +14,7 @@ from the earlier allocation report. The production measurements below are from
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 1280x720 4:2:0 | 1,382,400 | 92,304 | 92,160 | 61,440 | 61,440 |
 | 2560x1440 4:2:0, 1:1 fast path, I420 | 5,529,600 | 123,024 | 122,880 | 61,440 | 0 |
-| 2560x1440 4:2:0, 1:1 fast path, NV12 | 5,529,600 | 123,024 | 122,880 | 61,440 | 20,480 |
+| 2560x1440 4:2:0, 1:1 fast path, NV12 | 5,529,600 | 123,024 | 122,880 | 61,440 | 0 |
 
 `Production peak allocation` now excludes the previous dynamic NanoJPEG VLC
 lookup block. NanoJPEG decodes DHT tables into compact canonical Huffman
@@ -50,11 +50,11 @@ to get the path-specific requirement before allocating the slice work buffer:
 | Output format | Effective slice work bytes | Notes |
 | --- | ---: | --- |
 | I420 | 0 | Encoder slice planes point directly into the retained MCU-row cache; `work_buffer` may be `NULL` with zero capacity |
-| NV12 | 20,480 | Luma points into the cache; chroma is interleaved into an 8-row UV staging window |
+| NV12 | 0 | The internal JPEG bridge points the encoder at retained Y, Cb, and Cr rows without an interleaved UV staging window |
 
-`docs/CORTEX_M_OPTIMIZATION_PLAN.md` tracks a follow-up target to reduce the
-`2560x1440` JPEG 4:2:0 1:1 NV12 effective slice work toward zero without
-changing public JPEG APIs or regressing to full component-frame decode.
+Issue #79 removed the `2560x1440` JPEG 4:2:0 1:1 NV12 slice-work staging
+requirement without changing public JPEG APIs or regressing to full
+component-frame decode.
 
 ## Output Buffer Boundary
 
@@ -97,16 +97,15 @@ storage and `.rodata`, the current budget is:
 | Block | Bytes |
 | --- | ---: |
 | JPEG work arena | 123,024 |
-| JPEG/scaler slice work | 0 for I420, 20,480 for NV12 |
+| JPEG/scaler slice work | 0 |
 | Reusable H.264 output chunk buffer | 4,096 |
 | Encoder arena | 303 |
 | Static mutable RAM | about 5,041 |
-| Rounded planning budget | about 130 KiB I420 / 150 KiB NV12 |
+| Rounded planning budget | about 130 KiB |
 
-The I420 arithmetic subtotal of the rows above is about 132,464 bytes, or about
-129 KiB in binary units. The equivalent NV12 subtotal is about 152,944 bytes,
-or about 149 KiB. The rounded planning budget is about 130 KiB for I420 and
-about 150 KiB for NV12 on this embedded path.
+The arithmetic subtotal of the rows above is about 132,464 bytes, or about
+129 KiB in binary units. The rounded planning budget is about 130 KiB for both
+I420 and NV12 on this embedded path.
 
 The encoder arena row is reported by `sh264e_encoder_get_work_size`; see
 `docs/ENCODER_MEMORY_REPORT.md` for the raw context, bitstream scratch,

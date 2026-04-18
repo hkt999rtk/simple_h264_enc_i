@@ -165,13 +165,21 @@ static sh264e_status_t sh264e_begin_idr_to_consumer(sh264e_encoder_t *encoder,
                                                     size_t *out_size,
                                                     sh264e_output_consumer_t consumer,
                                                     void *consumer_user);
-static sh264e_status_t sh264e_encode_idr_slice_to_consumer(sh264e_encoder_t *encoder,
-                                                           const sh264e_slice_t *slice,
-                                                           uint8_t *chunk_buffer,
-                                                           size_t chunk_capacity,
-                                                           size_t *out_size,
-                                                           sh264e_output_consumer_t consumer,
-                                                           void *consumer_user);
+static sh264e_status_t sh264e_encode_idr_slice_internal(sh264e_encoder_t *encoder,
+                                                        const sh264e_slice_t *slice,
+                                                        uint8_t *out,
+                                                        size_t out_capacity,
+                                                        size_t *out_size,
+                                                        int require_config_pixfmt);
+static sh264e_status_t sh264e_encode_idr_slice_to_consumer_internal(
+    sh264e_encoder_t *encoder,
+    const sh264e_slice_t *slice,
+    uint8_t *chunk_buffer,
+    size_t chunk_capacity,
+    size_t *out_size,
+    sh264e_output_consumer_t consumer,
+    void *consumer_user,
+    int require_config_pixfmt);
 static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *encoder,
                                                              const uint8_t *jpeg_data,
                                                              size_t jpeg_size,
@@ -477,12 +485,13 @@ static sh264e_status_t validate_frame(const sh264e_config_t *config, const sh264
     return SH264E_OK;
 }
 
-static sh264e_status_t validate_slice(const sh264e_config_t *config, const sh264e_slice_t *slice)
+static sh264e_status_t validate_internal_slice_storage(const sh264e_config_t *config,
+                                                       const sh264e_slice_t *slice)
 {
     if (config == NULL || slice == NULL) {
         return SH264E_ERR_INVALID_ARGUMENT;
     }
-    if (slice->pixfmt != config->pixfmt) {
+    if (slice->pixfmt != SH264E_PIXFMT_I420 && slice->pixfmt != SH264E_PIXFMT_NV12) {
         return SH264E_ERR_UNSUPPORTED_CONFIG;
     }
     if (slice->plane[0] == NULL || slice->stride[0] < (ptrdiff_t)config->width) {
@@ -500,6 +509,17 @@ static sh264e_status_t validate_slice(const sh264e_config_t *config, const sh264
         }
     }
     return SH264E_OK;
+}
+
+static sh264e_status_t validate_slice(const sh264e_config_t *config, const sh264e_slice_t *slice)
+{
+    if (config == NULL || slice == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    if (slice->pixfmt != config->pixfmt) {
+        return SH264E_ERR_UNSUPPORTED_CONFIG;
+    }
+    return validate_internal_slice_storage(config, slice);
 }
 
 static sh264e_status_t validate_resize_source_frame(const sh264e_frame_t *frame)
@@ -1017,30 +1037,6 @@ static void streaming_make_i420_slice(const sh264e_jpeg_stream_context_t *ctx,
     }
 }
 
-static void streaming_interleave_direct_nv12_chroma_slice(const sh264e_jpeg_stream_context_t *ctx,
-                                                          unsigned slice_index,
-                                                          uint8_t *dst_uv)
-{
-    const sh264e_jpeg_stream_component_t *cb = &ctx->components[1];
-    const sh264e_jpeg_stream_component_t *cr = &ctx->components[2];
-    const uint32_t chroma_row = (uint32_t)slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT;
-    const uint8_t *src_cb = cb->pixels + (size_t)(chroma_row - cb->row0) * (size_t)cb->stride;
-    const uint8_t *src_cr = cr->pixels + (size_t)(chroma_row - cr->row0) * (size_t)cr->stride;
-    uint32_t y;
-
-    for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
-        const uint8_t *row_cb = src_cb + (size_t)y * (size_t)cb->stride;
-        const uint8_t *row_cr = src_cr + (size_t)y * (size_t)cr->stride;
-        uint8_t *row = dst_uv + (size_t)y * SH264E_V1_WIDTH;
-        uint32_t x;
-
-        for (x = 0; x < SH264E_CHROMA_WIDTH; x++) {
-            row[(size_t)x * 2u] = row_cb[x];
-            row[(size_t)x * 2u + 1u] = row_cr[x];
-        }
-    }
-}
-
 static void streaming_make_nv12_slice(const sh264e_jpeg_stream_context_t *ctx,
                                       unsigned slice_index,
                                       sh264e_slice_t *slice)
@@ -1050,15 +1046,18 @@ static void streaming_make_nv12_slice(const sh264e_jpeg_stream_context_t *ctx,
 
     if (ctx->one_to_one_420) {
         const sh264e_jpeg_stream_component_t *y = &ctx->components[0];
+        const sh264e_jpeg_stream_component_t *cb = &ctx->components[1];
+        const sh264e_jpeg_stream_component_t *cr = &ctx->components[2];
         const uint32_t luma_row = (uint32_t)slice_index * SH264E_V1_SLICE_LUMA_HEIGHT;
-        uint8_t *dst_uv = ctx->work_buffer;
+        const uint32_t chroma_row = (uint32_t)slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT;
 
-        streaming_interleave_direct_nv12_chroma_slice(ctx, slice_index, dst_uv);
-
+        slice->pixfmt = SH264E_PIXFMT_I420;
         slice->plane[0] = y->pixels + (size_t)(luma_row - y->row0) * (size_t)y->stride;
-        slice->plane[1] = dst_uv;
+        slice->plane[1] = cb->pixels + (size_t)(chroma_row - cb->row0) * (size_t)cb->stride;
+        slice->plane[2] = cr->pixels + (size_t)(chroma_row - cr->row0) * (size_t)cr->stride;
         slice->stride[0] = y->stride;
-        slice->stride[1] = SH264E_V1_WIDTH;
+        slice->stride[1] = cb->stride;
+        slice->stride[2] = cr->stride;
         return;
     }
 
@@ -1104,8 +1103,6 @@ static sh264e_status_t streaming_init_cache(sh264e_jpeg_stream_context_t *ctx)
     const int image_height = njGetHeight();
     const int y_width = njGetComponentWidth(0);
     const int y_height = njGetComponentHeight(0);
-    const sh264e_pixfmt_t pixfmt = ctx->encoder != NULL ? ctx->encoder->config.pixfmt :
-                                                          ctx->output_pixfmt;
     unsigned i;
 
     if (component_count != 1 && component_count != 3) {
@@ -1135,9 +1132,7 @@ static sh264e_status_t streaming_init_cache(sh264e_jpeg_stream_context_t *ctx)
     ctx->one_to_one_420 = streaming_is_one_to_one_420();
     ctx->effective_slice_work_bytes = resize_scaled_slice_buffer_size();
     if (ctx->one_to_one_420) {
-        ctx->effective_slice_work_bytes = pixfmt == SH264E_PIXFMT_NV12
-                                              ? (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT
-                                              : 0u;
+        ctx->effective_slice_work_bytes = 0u;
     }
     if (!ctx->measure_only && ctx->effective_slice_work_bytes != 0u) {
         if (ctx->work_buffer == NULL) {
@@ -1289,18 +1284,20 @@ static sh264e_status_t streaming_encode_idr_slice(sh264e_jpeg_stream_context_t *
                                                   size_t *bytes)
 {
     if (ctx->consumer != NULL) {
-        return sh264e_encode_idr_slice_to_consumer(ctx->encoder,
-                                                   slice,
-                                                   ctx->out,
-                                                   ctx->out_capacity,
-                                                   bytes,
-                                                   ctx->consumer,
-                                                   ctx->consumer_user);
+        return sh264e_encode_idr_slice_to_consumer_internal(ctx->encoder,
+                                                            slice,
+                                                            ctx->out,
+                                                            ctx->out_capacity,
+                                                            bytes,
+                                                            ctx->consumer,
+                                                            ctx->consumer_user,
+                                                            0);
     }
-    return sh264e_encode_idr_slice(ctx->encoder, slice,
-                                   streaming_output_ptr(ctx),
-                                   streaming_output_capacity(ctx),
-                                   bytes);
+    return sh264e_encode_idr_slice_internal(ctx->encoder, slice,
+                                            streaming_output_ptr(ctx),
+                                            streaming_output_capacity(ctx),
+                                            bytes,
+                                            0);
 }
 
 static int streaming_mcu_row_ready(int mcu_y, void *user)
@@ -3069,11 +3066,12 @@ sh264e_status_t sh264e_begin_idr(sh264e_encoder_t *encoder,
     return SH264E_OK;
 }
 
-sh264e_status_t sh264e_encode_idr_slice(sh264e_encoder_t *encoder,
-                                        const sh264e_slice_t *slice,
-                                        uint8_t *out,
-                                        size_t out_capacity,
-                                        size_t *out_size)
+static sh264e_status_t sh264e_encode_idr_slice_internal(sh264e_encoder_t *encoder,
+                                                        const sh264e_slice_t *slice,
+                                                        uint8_t *out,
+                                                        size_t out_capacity,
+                                                        size_t *out_size,
+                                                        int require_config_pixfmt)
 {
     sh264e_status_t status;
     size_t offset = 0;
@@ -3088,7 +3086,9 @@ sh264e_status_t sh264e_encode_idr_slice(sh264e_encoder_t *encoder,
     if (encoder->slices_encoded >= SH264E_MBS_Y) {
         return SH264E_ERR_FRAME_COMPLETE;
     }
-    status = validate_slice(&encoder->config, slice);
+    status = require_config_pixfmt != 0
+                 ? validate_slice(&encoder->config, slice)
+                 : validate_internal_slice_storage(&encoder->config, slice);
     if (status != SH264E_OK) {
         return status;
     }
@@ -3110,6 +3110,15 @@ sh264e_status_t sh264e_encode_idr_slice(sh264e_encoder_t *encoder,
     encoder->slices_encoded++;
     *out_size = offset;
     return SH264E_OK;
+}
+
+sh264e_status_t sh264e_encode_idr_slice(sh264e_encoder_t *encoder,
+                                        const sh264e_slice_t *slice,
+                                        uint8_t *out,
+                                        size_t out_capacity,
+                                        size_t *out_size)
+{
+    return sh264e_encode_idr_slice_internal(encoder, slice, out, out_capacity, out_size, 1);
 }
 
 static sh264e_status_t sh264e_begin_idr_to_consumer(sh264e_encoder_t *encoder,
@@ -3164,13 +3173,15 @@ static sh264e_status_t sh264e_begin_idr_to_consumer(sh264e_encoder_t *encoder,
     return SH264E_OK;
 }
 
-static sh264e_status_t sh264e_encode_idr_slice_to_consumer(sh264e_encoder_t *encoder,
-                                                           const sh264e_slice_t *slice,
-                                                           uint8_t *chunk_buffer,
-                                                           size_t chunk_capacity,
-                                                           size_t *out_size,
-                                                           sh264e_output_consumer_t consumer,
-                                                           void *consumer_user)
+static sh264e_status_t sh264e_encode_idr_slice_to_consumer_internal(
+    sh264e_encoder_t *encoder,
+    const sh264e_slice_t *slice,
+    uint8_t *chunk_buffer,
+    size_t chunk_capacity,
+    size_t *out_size,
+    sh264e_output_consumer_t consumer,
+    void *consumer_user,
+    int require_config_pixfmt)
 {
     sh264e_status_t status;
     size_t total = 0u;
@@ -3186,7 +3197,9 @@ static sh264e_status_t sh264e_encode_idr_slice_to_consumer(sh264e_encoder_t *enc
     if (encoder->slices_encoded >= SH264E_MBS_Y) {
         return SH264E_ERR_FRAME_COMPLETE;
     }
-    status = validate_slice(&encoder->config, slice);
+    status = require_config_pixfmt != 0
+                 ? validate_slice(&encoder->config, slice)
+                 : validate_internal_slice_storage(&encoder->config, slice);
     if (status != SH264E_OK) {
         return status;
     }
