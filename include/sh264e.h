@@ -63,6 +63,15 @@ typedef struct sh264e_jpeg_allocation_stats_t {
     size_t peak_bytes;
 } sh264e_jpeg_allocation_stats_t;
 
+typedef struct sh264e_encoder_memory_report_t {
+    size_t context_bytes;
+    size_t bitstream_scratch_bytes;
+    size_t recon_luma_bytes;
+    size_t recon_chroma_bytes;
+    size_t neighbor_state_bytes;
+    size_t total_bytes;
+} sh264e_encoder_memory_report_t;
+
 typedef struct sh264e_encoder_t sh264e_encoder_t;
 
 typedef sh264e_status_t (*sh264e_output_consumer_t)(void *user,
@@ -82,6 +91,10 @@ sh264e_status_t sh264e_get_max_slice_output_size(const sh264e_config_t *config,
 
 sh264e_status_t sh264e_get_max_output_size(const sh264e_config_t *config,
                                            size_t *out_size);
+
+sh264e_status_t sh264e_encoder_get_memory_report(
+    const sh264e_config_t *config,
+    sh264e_encoder_memory_report_t *out_report);
 
 sh264e_status_t sh264e_begin_idr(sh264e_encoder_t *encoder,
                                  uint8_t *out,
