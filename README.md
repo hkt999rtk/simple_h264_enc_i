@@ -121,7 +121,7 @@ Encode a baseline JPEG memory-input path through the library wrapper:
 ./build/sh264e_encode_jpeg --format nv12 input.jpg output.h264
 ```
 
-The JPEG path uses NanoJPEG inside the core library. The tool only reads the JPEG file and writes the `.h264` output; the library API accepts a caller-provided JPEG byte buffer and emits complete Annex B chunks through caller-owned output memory.
+The JPEG path uses NanoJPEG inside the core library. The tool only reads the JPEG file and writes the `.h264` output; the library API accepts a caller-provided JPEG byte buffer and emits Annex B byte-stream chunks through caller-owned output memory.
 The tool sizes a caller-provided JPEG decoder arena with `sh264e_jpeg_get_work_size`, passes that arena to `sh264e_encode_jpeg_idr_with_arena_stream`, and prints the arena requirement plus current and peak NanoJPEG allocation bytes reported by `sh264e_jpeg_get_last_allocation_stats`.
 The public diagnostic surface also exposes `sh264e_jpeg_get_last_streaming_cache_bytes` so tools and regression tests can report decoded-row cache usage without private declarations.
 The arena-backed production path now uses MCU-row streaming by default. It keeps only NanoJPEG's current MCU-row buffers and the retained row cache, then feeds one scaled output slice at a time to the progressive encoder.
@@ -133,7 +133,7 @@ placement, but it must not decode the JPEG into a full RGB, grayscale, Y, Cb, or
 Cr component frame. One-shot JPEG APIs may still require a caller-provided
 complete H.264 output buffer; that output model is separate from JPEG decoded
 image memory.
-The JPEG tool uses the streaming H.264 output consumer API for its production arena path, so it writes each SPS/PPS or slice chunk as it is produced instead of allocating `sh264e_get_max_output_size()` bytes for the complete frame. For the current 2560x1440 encoder geometry this replaces the 11,428,864-byte one-shot output capacity with a reusable 126,976-byte output chunk buffer. Embedded callers can use the same API to forward chunks to flash, storage, DMA, or a ring buffer without a full-frame output buffer.
+The JPEG tool uses the streaming H.264 output consumer API for its production arena path, so it flushes the Annex B byte stream as it is produced instead of allocating `sh264e_get_max_output_size()` bytes for the complete frame. For the current 2560x1440 encoder geometry this replaces the 11,428,864-byte one-shot output capacity with a reusable 4,096-byte output chunk buffer. Embedded callers can use the same API to forward chunks to flash, storage, DMA, or a ring buffer without a full-frame or full-slice output buffer.
 
 For Cortex-M validation, CMake builds QEMU smoke firmware for M3/M4/M7 when the ARM bare-metal toolchain and QEMU are available. CMake first probes whether `arm-none-eabi-gcc` can compile the library's standard-header usage; if the toolchain is only partially installed, QEMU firmware tests are skipped instead of breaking the host build.
 

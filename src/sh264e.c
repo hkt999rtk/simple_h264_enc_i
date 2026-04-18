@@ -41,6 +41,15 @@ typedef struct sh264e_bit_writer_t {
     int error;
 } sh264e_bit_writer_t;
 
+typedef struct sh264e_chunk_writer_t {
+    uint8_t *buffer;
+    size_t capacity;
+    size_t size;
+    size_t total;
+    sh264e_output_consumer_t consumer;
+    void *user;
+} sh264e_chunk_writer_t;
+
 struct sh264e_encoder_t {
     sh264e_config_t config;
     uint8_t *rbsp;
@@ -133,6 +142,19 @@ static size_t sh264e_jpeg_alloc_arena_capacity;
 static size_t sh264e_jpeg_streaming_last_cache_bytes;
 
 static void reset_progressive_state(sh264e_encoder_t *encoder);
+static sh264e_status_t sh264e_begin_idr_to_consumer(sh264e_encoder_t *encoder,
+                                                    uint8_t *chunk_buffer,
+                                                    size_t chunk_capacity,
+                                                    size_t *out_size,
+                                                    sh264e_output_consumer_t consumer,
+                                                    void *consumer_user);
+static sh264e_status_t sh264e_encode_idr_slice_to_consumer(sh264e_encoder_t *encoder,
+                                                           const sh264e_slice_t *slice,
+                                                           uint8_t *chunk_buffer,
+                                                           size_t chunk_capacity,
+                                                           size_t *out_size,
+                                                           sh264e_output_consumer_t consumer,
+                                                           void *consumer_user);
 static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *encoder,
                                                              const uint8_t *jpeg_data,
                                                              size_t jpeg_size,
@@ -1017,6 +1039,41 @@ static sh264e_status_t streaming_emit_output(sh264e_jpeg_stream_context_t *ctx, 
     return SH264E_OK;
 }
 
+static sh264e_status_t streaming_begin_idr(sh264e_jpeg_stream_context_t *ctx, size_t *bytes)
+{
+    if (ctx->consumer != NULL) {
+        return sh264e_begin_idr_to_consumer(ctx->encoder,
+                                            ctx->out,
+                                            ctx->out_capacity,
+                                            bytes,
+                                            ctx->consumer,
+                                            ctx->consumer_user);
+    }
+    return sh264e_begin_idr(ctx->encoder,
+                            streaming_output_ptr(ctx),
+                            streaming_output_capacity(ctx),
+                            bytes);
+}
+
+static sh264e_status_t streaming_encode_idr_slice(sh264e_jpeg_stream_context_t *ctx,
+                                                  const sh264e_slice_t *slice,
+                                                  size_t *bytes)
+{
+    if (ctx->consumer != NULL) {
+        return sh264e_encode_idr_slice_to_consumer(ctx->encoder,
+                                                   slice,
+                                                   ctx->out,
+                                                   ctx->out_capacity,
+                                                   bytes,
+                                                   ctx->consumer,
+                                                   ctx->consumer_user);
+    }
+    return sh264e_encode_idr_slice(ctx->encoder, slice,
+                                   streaming_output_ptr(ctx),
+                                   streaming_output_capacity(ctx),
+                                   bytes);
+}
+
 static int streaming_mcu_row_ready(int mcu_y, void *user)
 {
     sh264e_jpeg_stream_context_t *ctx = (sh264e_jpeg_stream_context_t *)user;
@@ -1040,12 +1097,11 @@ static int streaming_mcu_row_ready(int mcu_y, void *user)
     }
     if (!ctx->idr_started) {
         size_t bytes = 0u;
-        ctx->status = sh264e_begin_idr(ctx->encoder,
-                                       streaming_output_ptr(ctx),
-                                       streaming_output_capacity(ctx),
-                                       &bytes);
-        if (ctx->status == SH264E_OK) {
+        ctx->status = streaming_begin_idr(ctx, &bytes);
+        if (ctx->status == SH264E_OK && ctx->consumer == NULL) {
             ctx->status = streaming_emit_output(ctx, bytes);
+        } else if (ctx->status == SH264E_OK) {
+            ctx->offset += bytes;
         }
         if (ctx->status != SH264E_OK) {
             return 1;
@@ -1063,12 +1119,11 @@ static int streaming_mcu_row_ready(int mcu_y, void *user)
         } else {
             streaming_make_nv12_slice(ctx, ctx->next_slice, &slice);
         }
-        ctx->status = sh264e_encode_idr_slice(ctx->encoder, &slice,
-                                              streaming_output_ptr(ctx),
-                                              streaming_output_capacity(ctx),
-                                              &bytes);
-        if (ctx->status == SH264E_OK) {
+        ctx->status = streaming_encode_idr_slice(ctx, &slice, &bytes);
+        if (ctx->status == SH264E_OK && ctx->consumer == NULL) {
             ctx->status = streaming_emit_output(ctx, bytes);
+        } else if (ctx->status == SH264E_OK) {
+            ctx->offset += bytes;
         }
         if (ctx->status != SH264E_OK) {
             return 1;
@@ -1322,6 +1377,98 @@ static int append_byte(uint8_t *out, size_t capacity, size_t *offset, uint8_t va
     return 1;
 }
 
+static sh264e_status_t chunk_writer_flush(sh264e_chunk_writer_t *writer)
+{
+    sh264e_status_t status;
+
+    if (writer->size == 0u) {
+        return SH264E_OK;
+    }
+    status = writer->consumer(writer->user, writer->buffer, writer->size);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    writer->total += writer->size;
+    writer->size = 0u;
+    return SH264E_OK;
+}
+
+static sh264e_status_t chunk_writer_put_byte(sh264e_chunk_writer_t *writer, uint8_t value)
+{
+    sh264e_status_t status;
+
+    if (writer->size == writer->capacity) {
+        status = chunk_writer_flush(writer);
+        if (status != SH264E_OK) {
+            return status;
+        }
+    }
+    writer->buffer[writer->size++] = value;
+    return SH264E_OK;
+}
+
+static sh264e_status_t stream_annexb_nalu(uint8_t *chunk_buffer,
+                                          size_t chunk_capacity,
+                                          size_t *out_size,
+                                          sh264e_output_consumer_t consumer,
+                                          void *consumer_user,
+                                          uint8_t nal_header,
+                                          const uint8_t *rbsp,
+                                          size_t rbsp_size)
+{
+    sh264e_chunk_writer_t writer;
+    size_t i;
+    unsigned zero_count = 0;
+    sh264e_status_t status;
+
+    if (chunk_buffer == NULL || out_size == NULL || consumer == NULL ||
+        rbsp == NULL || chunk_capacity == 0u) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+
+    memset(&writer, 0, sizeof(writer));
+    writer.buffer = chunk_buffer;
+    writer.capacity = chunk_capacity;
+    writer.consumer = consumer;
+    writer.user = consumer_user;
+
+#define SH264E_TRY_PUT_BYTE(v)            \
+    do {                                  \
+        status = chunk_writer_put_byte(&writer, (uint8_t)(v)); \
+        if (status != SH264E_OK) {        \
+            return status;                \
+        }                                 \
+    } while (0)
+
+    SH264E_TRY_PUT_BYTE(0x00u);
+    SH264E_TRY_PUT_BYTE(0x00u);
+    SH264E_TRY_PUT_BYTE(0x01u);
+    SH264E_TRY_PUT_BYTE(nal_header);
+
+    for (i = 0; i < rbsp_size; i++) {
+        const uint8_t b = rbsp[i];
+        if (zero_count >= 2u && b <= 0x03u) {
+            SH264E_TRY_PUT_BYTE(0x03u);
+            zero_count = 0;
+        }
+        SH264E_TRY_PUT_BYTE(b);
+        if (b == 0x00u) {
+            zero_count++;
+        } else {
+            zero_count = 0;
+        }
+    }
+
+#undef SH264E_TRY_PUT_BYTE
+
+    status = chunk_writer_flush(&writer);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    *out_size = writer.total;
+    return SH264E_OK;
+}
+
 static sh264e_status_t append_annexb_nalu(uint8_t *out,
                                           size_t capacity,
                                           size_t *offset,
@@ -1360,10 +1507,7 @@ static sh264e_status_t append_annexb_nalu(uint8_t *out,
     return SH264E_OK;
 }
 
-static sh264e_status_t make_sps(sh264e_encoder_t *encoder,
-                                uint8_t *out,
-                                size_t capacity,
-                                size_t *offset)
+static sh264e_status_t write_sps_rbsp(sh264e_encoder_t *encoder, size_t *out_rbsp_size)
 {
     sh264e_bit_writer_t bw;
     bw_init(&bw, encoder->rbsp, encoder->rbsp_capacity);
@@ -1388,13 +1532,26 @@ static sh264e_status_t make_sps(sh264e_encoder_t *encoder,
     if (bw.error != 0) {
         return SH264E_ERR_INTERNAL;
     }
-    return append_annexb_nalu(out, capacity, offset, 0x67u, encoder->rbsp, bw_size(&bw));
+    *out_rbsp_size = bw_size(&bw);
+    return SH264E_OK;
 }
 
-static sh264e_status_t make_pps(sh264e_encoder_t *encoder,
+static sh264e_status_t make_sps(sh264e_encoder_t *encoder,
                                 uint8_t *out,
                                 size_t capacity,
                                 size_t *offset)
+{
+    sh264e_status_t status;
+    size_t rbsp_size = 0u;
+
+    status = write_sps_rbsp(encoder, &rbsp_size);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    return append_annexb_nalu(out, capacity, offset, 0x67u, encoder->rbsp, rbsp_size);
+}
+
+static sh264e_status_t write_pps_rbsp(sh264e_encoder_t *encoder, size_t *out_rbsp_size)
 {
     sh264e_bit_writer_t bw;
     bw_init(&bw, encoder->rbsp, encoder->rbsp_capacity);
@@ -1419,7 +1576,23 @@ static sh264e_status_t make_pps(sh264e_encoder_t *encoder,
     if (bw.error != 0) {
         return SH264E_ERR_INTERNAL;
     }
-    return append_annexb_nalu(out, capacity, offset, 0x68u, encoder->rbsp, bw_size(&bw));
+    *out_rbsp_size = bw_size(&bw);
+    return SH264E_OK;
+}
+
+static sh264e_status_t make_pps(sh264e_encoder_t *encoder,
+                                uint8_t *out,
+                                size_t capacity,
+                                size_t *offset)
+{
+    sh264e_status_t status;
+    size_t rbsp_size = 0u;
+
+    status = write_pps_rbsp(encoder, &rbsp_size);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    return append_annexb_nalu(out, capacity, offset, 0x68u, encoder->rbsp, rbsp_size);
 }
 
 static int clip_u8(int value)
@@ -1769,12 +1942,10 @@ static void set_luma_nz(sh264e_encoder_t *encoder, unsigned block_x, unsigned bl
     encoder->nz_luma[(size_t)block_y * SH264E_LUMA4_X + block_x] = nz;
 }
 
-static sh264e_status_t make_idr_slice(sh264e_encoder_t *encoder,
-                                      const sh264e_slice_t *slice,
-                                      unsigned slice_index,
-                                      uint8_t *out,
-                                      size_t capacity,
-                                      size_t *offset)
+static sh264e_status_t write_idr_slice_rbsp(sh264e_encoder_t *encoder,
+                                            const sh264e_slice_t *slice,
+                                            unsigned slice_index,
+                                            size_t *out_rbsp_size)
 {
     sh264e_bit_writer_t bw;
     unsigned mb_x;
@@ -1855,7 +2026,25 @@ static sh264e_status_t make_idr_slice(sh264e_encoder_t *encoder,
     if (bw.error != 0) {
         return SH264E_ERR_INTERNAL;
     }
-    return append_annexb_nalu(out, capacity, offset, 0x65u, encoder->rbsp, bw_size(&bw));
+    *out_rbsp_size = bw_size(&bw);
+    return SH264E_OK;
+}
+
+static sh264e_status_t make_idr_slice(sh264e_encoder_t *encoder,
+                                      const sh264e_slice_t *slice,
+                                      unsigned slice_index,
+                                      uint8_t *out,
+                                      size_t capacity,
+                                      size_t *offset)
+{
+    sh264e_status_t status;
+    size_t rbsp_size = 0u;
+
+    status = write_idr_slice_rbsp(encoder, slice, slice_index, &rbsp_size);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    return append_annexb_nalu(out, capacity, offset, 0x65u, encoder->rbsp, rbsp_size);
 }
 
 static sh264e_status_t map_jpeg_result(int result)
@@ -2392,6 +2581,103 @@ sh264e_status_t sh264e_encode_idr_slice(sh264e_encoder_t *encoder,
 
     encoder->slices_encoded++;
     *out_size = offset;
+    return SH264E_OK;
+}
+
+static sh264e_status_t sh264e_begin_idr_to_consumer(sh264e_encoder_t *encoder,
+                                                    uint8_t *chunk_buffer,
+                                                    size_t chunk_capacity,
+                                                    size_t *out_size,
+                                                    sh264e_output_consumer_t consumer,
+                                                    void *consumer_user)
+{
+    sh264e_status_t status;
+    size_t bytes = 0u;
+    size_t total = 0u;
+
+    if (encoder == NULL || chunk_buffer == NULL || out_size == NULL || consumer == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    *out_size = 0u;
+    if (encoder->idr_active != 0u) {
+        return SH264E_ERR_BAD_STATE;
+    }
+    if (chunk_capacity == 0u) {
+        return SH264E_ERR_BUFFER_TOO_SMALL;
+    }
+
+    status = write_sps_rbsp(encoder, &bytes);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    status = stream_annexb_nalu(chunk_buffer, chunk_capacity, &bytes,
+                                consumer, consumer_user, 0x67u,
+                                encoder->rbsp, bytes);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    total += bytes;
+
+    status = write_pps_rbsp(encoder, &bytes);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    status = stream_annexb_nalu(chunk_buffer, chunk_capacity, &bytes,
+                                consumer, consumer_user, 0x68u,
+                                encoder->rbsp, bytes);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    total += bytes;
+
+    encoder->idr_active = 1u;
+    encoder->slices_encoded = 0u;
+    *out_size = total;
+    return SH264E_OK;
+}
+
+static sh264e_status_t sh264e_encode_idr_slice_to_consumer(sh264e_encoder_t *encoder,
+                                                           const sh264e_slice_t *slice,
+                                                           uint8_t *chunk_buffer,
+                                                           size_t chunk_capacity,
+                                                           size_t *out_size,
+                                                           sh264e_output_consumer_t consumer,
+                                                           void *consumer_user)
+{
+    sh264e_status_t status;
+    size_t bytes = 0u;
+
+    if (encoder == NULL || slice == NULL || chunk_buffer == NULL ||
+        out_size == NULL || consumer == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    *out_size = 0u;
+    if (encoder->idr_active == 0u) {
+        return SH264E_ERR_BAD_STATE;
+    }
+    if (encoder->slices_encoded >= SH264E_MBS_Y) {
+        return SH264E_ERR_FRAME_COMPLETE;
+    }
+    status = validate_slice(&encoder->config, slice);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    if (chunk_capacity == 0u) {
+        return SH264E_ERR_BUFFER_TOO_SMALL;
+    }
+
+    status = write_idr_slice_rbsp(encoder, slice, encoder->slices_encoded, &bytes);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    status = stream_annexb_nalu(chunk_buffer, chunk_capacity, out_size,
+                                consumer, consumer_user, 0x65u,
+                                encoder->rbsp, bytes);
+    if (status != SH264E_OK) {
+        return status;
+    }
+
+    encoder->slices_encoded++;
     return SH264E_OK;
 }
 

@@ -342,10 +342,11 @@ maximum complete-frame output capacity is:
 This output buffer is caller-owned and excluded from the JPEG arena metrics, but
 it dominates an embedded memory budget if the one-shot JPEG API is used. The
 production tool path now uses the streaming H.264 output consumer API: the
-library emits SPS/PPS and each IDR slice into a reusable chunk buffer and calls
-a caller-provided consumer. Tools/tests implement file or memory consumers
+library flushes Annex B bytes into a reusable chunk buffer and calls a
+caller-provided consumer. Tools/tests implement file or memory consumers
 outside the library; embedded callers can forward chunks to storage, flash, DMA,
-or a ring buffer. The reusable output chunk buffer is currently 126,976 bytes.
+or a ring buffer. The production reusable output chunk buffer is currently
+4,096 bytes.
 
 ### Current Production Boundary
 
