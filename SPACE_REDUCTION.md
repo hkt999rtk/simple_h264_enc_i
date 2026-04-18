@@ -216,6 +216,37 @@ Implemented API:
 * Test one-byte-too-small arena fails.
 * QEMU smoke test covers arena path when the ARM/QEMU toolchain is available.
 
+## NanoJPEG Static BSS Follow-Up
+
+NanoJPEG originally stored four fully expanded Huffman/VLC decode tables inside
+its static global context. For Cortex-M builds, that made `src/nanojpeg.c`
+reserve about 525 KiB of fixed BSS before any JPEG was decoded.
+
+The selected production-safe tradeoff is to allocate those VLC tables through
+the existing `njAllocMem` shim the first time a DHT marker is decoded. This
+keeps the public JPEG encode API unchanged and lets the heap-backed and
+caller-provided arena paths account for the table memory in the same way they
+already account for decoded component planes and row caches.
+
+Measured with:
+
+```sh
+arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -O2 -ffreestanding -fno-builtin \
+  -DNJ_USE_LIBC=0 -Iinclude -c src/nanojpeg.c -o nanojpeg.o
+arm-none-eabi-size -A nanojpeg.o
+```
+
+| Build mode | `.text` | `.bss` | Notes |
+| --- | ---: | ---: | --- |
+| Static VLC tables, `NJ_DYNAMIC_VLC=0` | 5,988 | 525,032 | Original fixed SRAM model |
+| Dynamic VLC tables, default `NJ_DYNAMIC_VLC=1` | 5,796 | 748 | VLC tables move to tracked JPEG allocation |
+
+The dynamic table block is `4 * 65,536 * sizeof(nj_vlc_code_t)`, currently
+524,288 bytes. This increases per-decode heap/arena work size by that amount,
+but removes it from fixed BSS and makes placement explicit for embedded
+integrations. Builds that prefer the original static allocation/speed tradeoff
+can compile NanoJPEG with `NJ_DYNAMIC_VLC=0`.
+
 ## Phase 5: MCU-Row Streaming Decode
 
 ### Plan

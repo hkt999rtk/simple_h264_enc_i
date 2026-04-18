@@ -172,6 +172,15 @@ directions:
 * smaller generated-on-demand decode tables
 * build-time option to trade speed for SRAM
 
+Selected implementation direction:
+
+* Default to arena-backed/dynamic VLC tables with `NJ_DYNAMIC_VLC=1`.
+* Keep `NJ_DYNAMIC_VLC=0` as a build-time escape hatch for projects that prefer
+  the original static-table model.
+* Route the dynamic tables through the existing NanoJPEG allocation shim so
+  heap and caller-provided arena paths both report the 524,288-byte table block
+  in their work-size/peak-allocation accounting.
+
 Acceptance criteria:
 
 * Cortex-M object-size report shows reduced fixed SRAM usage.
