@@ -388,6 +388,26 @@ static sh264e_status_t validate_config(const sh264e_config_t *config)
     return SH264E_OK;
 }
 
+static size_t encoder_recon_luma_bytes(void)
+{
+    return (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_LUMA_HEIGHT;
+}
+
+static size_t encoder_recon_chroma_plane_bytes(void)
+{
+    return (size_t)SH264E_CHROMA_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT;
+}
+
+static size_t encoder_recon_chroma_bytes(void)
+{
+    return encoder_recon_chroma_plane_bytes() * 2u;
+}
+
+static size_t encoder_neighbor_state_bytes(void)
+{
+    return (size_t)SH264E_LUMA4_X * SH264E_SLICE_LUMA4_Y;
+}
+
 static sh264e_status_t validate_frame(const sh264e_config_t *config, const sh264e_frame_t *frame)
 {
     if (config == NULL || frame == NULL) {
@@ -1950,10 +1970,10 @@ static sh264e_status_t write_idr_slice_rbsp(sh264e_encoder_t *encoder,
     sh264e_bit_writer_t bw;
     unsigned mb_x;
 
-    memset(encoder->recon_y, 0, (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_LUMA_HEIGHT);
-    memset(encoder->recon_u, 128, (size_t)SH264E_CHROMA_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT);
-    memset(encoder->recon_v, 128, (size_t)SH264E_CHROMA_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT);
-    memset(encoder->nz_luma, 0, (size_t)SH264E_LUMA4_X * SH264E_SLICE_LUMA4_Y);
+    memset(encoder->recon_y, 0, encoder_recon_luma_bytes());
+    memset(encoder->recon_u, 128, encoder_recon_chroma_plane_bytes());
+    memset(encoder->recon_v, 128, encoder_recon_chroma_plane_bytes());
+    memset(encoder->nz_luma, 0, encoder_neighbor_state_bytes());
 
     bw_init(&bw, encoder->rbsp, encoder->rbsp_capacity);
 
@@ -2421,10 +2441,10 @@ sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,
     encoder->config = normalized;
     encoder->rbsp_capacity = max_slice_output_size;
     encoder->rbsp = (uint8_t *)malloc(encoder->rbsp_capacity);
-    encoder->recon_y = (uint8_t *)malloc((size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_LUMA_HEIGHT);
-    encoder->recon_u = (uint8_t *)malloc((size_t)SH264E_CHROMA_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT);
-    encoder->recon_v = (uint8_t *)malloc((size_t)SH264E_CHROMA_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT);
-    encoder->nz_luma = (uint8_t *)malloc((size_t)SH264E_LUMA4_X * SH264E_SLICE_LUMA4_Y);
+    encoder->recon_y = (uint8_t *)malloc(encoder_recon_luma_bytes());
+    encoder->recon_u = (uint8_t *)malloc(encoder_recon_chroma_plane_bytes());
+    encoder->recon_v = (uint8_t *)malloc(encoder_recon_chroma_plane_bytes());
+    encoder->nz_luma = (uint8_t *)malloc(encoder_neighbor_state_bytes());
 
     if (encoder->rbsp == NULL || encoder->recon_y == NULL || encoder->recon_u == NULL ||
         encoder->recon_v == NULL || encoder->nz_luma == NULL) {
@@ -2510,6 +2530,44 @@ sh264e_status_t sh264e_get_max_output_size(const sh264e_config_t *config, size_t
         return status;
     }
     *out_size = header_size + slice_size * SH264E_MBS_Y;
+    return SH264E_OK;
+}
+
+sh264e_status_t sh264e_encoder_get_memory_report(
+    const sh264e_config_t *config,
+    sh264e_encoder_memory_report_t *out_report)
+{
+    sh264e_status_t status;
+    sh264e_config_t normalized;
+    size_t bitstream_scratch_bytes = 0u;
+
+    if (config == NULL || out_report == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    normalized = *config;
+    if (normalized.qp == 0) {
+        normalized.qp = SH264E_DEFAULT_QP;
+    }
+    status = validate_config(&normalized);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    status = sh264e_get_max_slice_output_size(&normalized, &bitstream_scratch_bytes);
+    if (status != SH264E_OK) {
+        return status;
+    }
+
+    memset(out_report, 0, sizeof(*out_report));
+    out_report->context_bytes = sizeof(sh264e_encoder_t);
+    out_report->bitstream_scratch_bytes = bitstream_scratch_bytes;
+    out_report->recon_luma_bytes = encoder_recon_luma_bytes();
+    out_report->recon_chroma_bytes = encoder_recon_chroma_bytes();
+    out_report->neighbor_state_bytes = encoder_neighbor_state_bytes();
+    out_report->total_bytes = out_report->context_bytes +
+                              out_report->bitstream_scratch_bytes +
+                              out_report->recon_luma_bytes +
+                              out_report->recon_chroma_bytes +
+                              out_report->neighbor_state_bytes;
     return SH264E_OK;
 }
 

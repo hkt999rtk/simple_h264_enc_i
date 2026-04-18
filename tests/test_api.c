@@ -165,6 +165,7 @@ int main(void)
     uint8_t *small_input = NULL;
     uint8_t *resize_work = NULL;
     sh264e_jpeg_allocation_stats_t jpeg_alloc_stats;
+    sh264e_encoder_memory_report_t encoder_memory_report;
     int ok = 1;
 
     memset(&config, 0, sizeof(config));
@@ -192,12 +193,52 @@ int main(void)
     ok &= expect_status("max slice output size",
                         sh264e_get_max_slice_output_size(&config, &slice_capacity),
                         SH264E_OK);
+    ok &= expect_status("null encoder memory config",
+                        sh264e_encoder_get_memory_report(NULL, &encoder_memory_report),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("null encoder memory report",
+                        sh264e_encoder_get_memory_report(&config, NULL),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    bad_config = config;
+    bad_config.height = 720u;
+    ok &= expect_status("unsupported encoder memory config",
+                        sh264e_encoder_get_memory_report(&bad_config, &encoder_memory_report),
+                        SH264E_ERR_UNSUPPORTED_CONFIG);
+    ok &= expect_status("encoder memory report",
+                        sh264e_encoder_get_memory_report(&config, &encoder_memory_report),
+                        SH264E_OK);
     if (output_capacity == 0u) {
         fprintf(stderr, "max output size returned zero\n");
         ok = 0;
     }
     if (header_capacity == 0u || slice_capacity == 0u) {
         fprintf(stderr, "progressive max output size returned zero\n");
+        ok = 0;
+    }
+    if (encoder_memory_report.context_bytes != 72u ||
+        encoder_memory_report.bitstream_scratch_bytes != slice_capacity ||
+        encoder_memory_report.recon_luma_bytes != 40960u ||
+        encoder_memory_report.recon_chroma_bytes != 20480u ||
+        encoder_memory_report.neighbor_state_bytes != 2560u ||
+        encoder_memory_report.total_bytes != 191048u) {
+        fprintf(stderr,
+                "unexpected encoder memory report: context=%zu bitstream=%zu "
+                "luma=%zu chroma=%zu neighbor=%zu total=%zu\n",
+                encoder_memory_report.context_bytes,
+                encoder_memory_report.bitstream_scratch_bytes,
+                encoder_memory_report.recon_luma_bytes,
+                encoder_memory_report.recon_chroma_bytes,
+                encoder_memory_report.neighbor_state_bytes,
+                encoder_memory_report.total_bytes);
+        ok = 0;
+    }
+    if (encoder_memory_report.total_bytes !=
+        encoder_memory_report.context_bytes +
+        encoder_memory_report.bitstream_scratch_bytes +
+        encoder_memory_report.recon_luma_bytes +
+        encoder_memory_report.recon_chroma_bytes +
+        encoder_memory_report.neighbor_state_bytes) {
+        fprintf(stderr, "encoder memory total does not match sub-block sum\n");
         ok = 0;
     }
     ok &= expect_status("null JPEG allocation stats",

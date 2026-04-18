@@ -37,6 +37,12 @@ H264_OUTPUT_CONSUMER_CHUNKS_MIN = 1 + 90
 H264_OUTPUT_CHUNK_BYTES = 4_096
 H264_TINY_OUTPUT_CHUNK_BYTES = 7
 H264_ONE_SHOT_OUTPUT_BYTES = 11_428_864
+ENCODER_CONTEXT_BYTES = 72
+ENCODER_BITSTREAM_SCRATCH_BYTES = 126_976
+ENCODER_RECON_LUMA_BYTES = 40_960
+ENCODER_RECON_CHROMA_BYTES = 20_480
+ENCODER_NEIGHBOR_STATE_BYTES = 2_560
+ENCODER_MEMORY_TOTAL_BYTES = 191_048
 EMBEDDED_OUTPUT_BUFFER_TOTAL_1440P_420 = (
     PRODUCTION_MEMORY_1440P_420["work"]
     + JPEG_SLICE_WORK_BYTES
@@ -297,6 +303,36 @@ def parse_jpeg_metric(stdout, prefix):
     raise RuntimeError(f"JPEG encoder did not report {prefix!r}: {stdout!r}")
 
 
+def validate_encoder_memory_report(stdout):
+    report = {
+        "context": parse_jpeg_metric(stdout, "encoder context bytes:"),
+        "bitstream": parse_jpeg_metric(stdout, "encoder bitstream scratch bytes:"),
+        "luma": parse_jpeg_metric(stdout, "encoder recon luma bytes:"),
+        "chroma": parse_jpeg_metric(stdout, "encoder recon chroma bytes:"),
+        "neighbor": parse_jpeg_metric(stdout, "encoder neighbor state bytes:"),
+        "total": parse_jpeg_metric(stdout, "encoder memory total bytes:"),
+    }
+    expected = {
+        "context": ENCODER_CONTEXT_BYTES,
+        "bitstream": ENCODER_BITSTREAM_SCRATCH_BYTES,
+        "luma": ENCODER_RECON_LUMA_BYTES,
+        "chroma": ENCODER_RECON_CHROMA_BYTES,
+        "neighbor": ENCODER_NEIGHBOR_STATE_BYTES,
+        "total": ENCODER_MEMORY_TOTAL_BYTES,
+    }
+    if report != expected:
+        raise RuntimeError(f"encoder memory report changed: got {report}, expected {expected}")
+    subtotal = (
+        report["context"]
+        + report["bitstream"]
+        + report["luma"]
+        + report["chroma"]
+        + report["neighbor"]
+    )
+    if report["total"] != subtotal:
+        raise RuntimeError(f"encoder memory total {report['total']} != sub-block sum {subtotal}")
+
+
 def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
                 expected_cache_bytes=None, max_peak_bytes=None,
                 expected_work_bytes=None, expected_peak_bytes=None):
@@ -310,6 +346,7 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
     one_shot_h264_output = one_shot_output or heap_wrapper_output
     if "jpeg current allocation bytes: 0" not in result.stdout:
         raise RuntimeError(f"JPEG encoder did not release tracked allocations: {result.stdout!r}")
+    validate_encoder_memory_report(result.stdout)
     if "jpeg work arena bytes:" not in result.stdout:
         raise RuntimeError(f"JPEG encoder did not report work arena size: {result.stdout!r}")
     work = parse_jpeg_metric(result.stdout, "jpeg work arena bytes:")
