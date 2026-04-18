@@ -95,12 +95,12 @@ storage and `.rodata`, the current budget is:
 | JPEG work arena | 123,024 |
 | JPEG/scaler slice work | 0 for I420, 20,480 for NV12 |
 | Reusable H.264 output chunk buffer | 4,096 |
-| Encoder arena | 2,127 |
+| Encoder arena | 2,095 |
 | Static mutable RAM | about 5,041 |
 | Rounded planning budget | about 135 KiB I420 / 155 KiB NV12 |
 
-The I420 arithmetic subtotal of the rows above is about 134,288 bytes, or about
-131 KiB in binary units. The equivalent NV12 subtotal is about 154,768 bytes,
+The I420 arithmetic subtotal of the rows above is about 134,256 bytes, or about
+131 KiB in binary units. The equivalent NV12 subtotal is about 154,736 bytes,
 or about 151 KiB. The rounded planning budget is about 135 KiB for I420 and
 about 155 KiB for NV12 on this embedded path.
 
