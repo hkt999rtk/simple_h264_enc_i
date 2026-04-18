@@ -23,6 +23,16 @@ FULL_COMPONENT_BYTES_720P = {
     "yuvj444p": 2_764_800,
 }
 FULL_COMPONENT_BYTES_1440P_420 = 5_529_600
+PRODUCTION_MEMORY_720P_420 = {
+    "work": 616_616,
+    "peak": 616_448,
+    "cache": STREAMING_CACHE_BYTES_720P["yuvj420p"],
+}
+PRODUCTION_MEMORY_1440P_420 = {
+    "work": 770_216,
+    "peak": 770_048,
+    "cache": STREAMING_CACHE_BYTES_1440P_420,
+}
 
 
 def run(cmd):
@@ -277,7 +287,8 @@ def parse_jpeg_metric(stdout, prefix):
 
 
 def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
-                expected_cache_bytes=None, max_peak_bytes=None):
+                expected_cache_bytes=None, max_peak_bytes=None,
+                expected_work_bytes=None, expected_peak_bytes=None):
     command = [args.jpeg_encoder]
     if extra_args:
         command.extend(extra_args)
@@ -287,6 +298,11 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
         raise RuntimeError(f"JPEG encoder did not release tracked allocations: {result.stdout!r}")
     if "jpeg work arena bytes:" not in result.stdout:
         raise RuntimeError(f"JPEG encoder did not report work arena size: {result.stdout!r}")
+    work = parse_jpeg_metric(result.stdout, "jpeg work arena bytes:")
+    if expected_work_bytes is not None and work != expected_work_bytes:
+        raise RuntimeError(
+            f"JPEG encoder default work arena changed for {jpeg_input}: got {work}, expected {expected_work_bytes}"
+        )
     slice_work = parse_jpeg_metric(result.stdout, "jpeg slice work bytes:")
     if slice_work != JPEG_SLICE_WORK_BYTES:
         raise RuntimeError(
@@ -295,6 +311,10 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
     peak = parse_jpeg_metric(result.stdout, "jpeg peak allocation bytes:")
     if peak == 0:
         raise RuntimeError(f"JPEG encoder reported zero peak allocation bytes: {result.stdout!r}")
+    if expected_peak_bytes is not None and peak != expected_peak_bytes:
+        raise RuntimeError(
+            f"JPEG encoder default peak changed for {jpeg_input}: got {peak}, expected {expected_peak_bytes}"
+        )
     cache = parse_jpeg_metric(result.stdout, "jpeg streaming cache bytes:")
     if cache == 0:
         raise RuntimeError(f"JPEG encoder default path did not report streaming cache bytes: {result.stdout!r}")
@@ -446,14 +466,23 @@ def main():
             encode_jpeg(args, "i420", jpeg_input, offset_arena_output,
                         ["--test-arena-offset", "1"],
                         STREAMING_CACHE_BYTES_720P[pix_fmt],
-                        FULL_COMPONENT_BYTES_720P[pix_fmt])
+                        FULL_COMPONENT_BYTES_720P[pix_fmt],
+                        PRODUCTION_MEMORY_720P_420["work"],
+                        PRODUCTION_MEMORY_720P_420["peak"])
             validate_bitstream(args.ffprobe, args.ffmpeg, offset_arena_output)
         for fmt in ("i420", "nv12"):
             jpeg_output = workdir / f"output_jpeg_{pix_fmt}_{fmt}.h264"
             streaming_output = workdir / f"output_jpeg_streaming_{pix_fmt}_{fmt}.h264"
+            expected_work = None
+            expected_peak = None
+            if pix_fmt == "yuvj420p":
+                expected_work = PRODUCTION_MEMORY_720P_420["work"]
+                expected_peak = PRODUCTION_MEMORY_720P_420["peak"]
             encode_jpeg(args, fmt, jpeg_input, jpeg_output,
                         expected_cache_bytes=STREAMING_CACHE_BYTES_720P[pix_fmt],
-                        max_peak_bytes=FULL_COMPONENT_BYTES_720P[pix_fmt])
+                        max_peak_bytes=FULL_COMPONENT_BYTES_720P[pix_fmt],
+                        expected_work_bytes=expected_work,
+                        expected_peak_bytes=expected_peak)
             encode_jpeg_streaming_prototype(args, fmt, jpeg_input, streaming_output,
                                             STREAMING_CACHE_BYTES_720P[pix_fmt])
             validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
@@ -467,7 +496,9 @@ def main():
     make_color_jpeg_sized(args, large_jpeg_input, "yuvj420p", LARGE_WIDTH, LARGE_HEIGHT)
     encode_jpeg(args, "i420", large_jpeg_input, large_jpeg_output,
                 expected_cache_bytes=STREAMING_CACHE_BYTES_1440P_420,
-                max_peak_bytes=FULL_COMPONENT_BYTES_1440P_420)
+                max_peak_bytes=FULL_COMPONENT_BYTES_1440P_420,
+                expected_work_bytes=PRODUCTION_MEMORY_1440P_420["work"],
+                expected_peak_bytes=PRODUCTION_MEMORY_1440P_420["peak"])
     encode_jpeg_streaming_prototype(args, "i420", large_jpeg_input, large_streaming_output,
                                     STREAMING_CACHE_BYTES_1440P_420)
     validate_bitstream(args.ffprobe, args.ffmpeg, large_streaming_output)
