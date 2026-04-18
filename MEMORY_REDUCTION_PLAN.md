@@ -149,9 +149,9 @@ Implemented bridge contract:
   61,440 bytes for 1280x720 4:2:0, 81,920 bytes for 1280x720 4:2:2,
   122,880 bytes for 1280x720 4:4:4, and 61,440 bytes for the 2560x1440 4:2:0
   1:1 fast path.
-* The JPEG tool and integration matrix also assert the scaled output slice work
-  buffer remains 61,440 bytes. For the 1:1 fast path, effective slice staging
-  is 0 bytes for I420 and 20,480 bytes for NV12.
+* The JPEG tool and integration matrix assert path-specific slice work. The
+  general scaler still needs 61,440 bytes, while the 1:1 fast path needs 0 bytes
+  for I420 and 20,480 bytes for NV12.
 
 ### 3. Production API Switch
 
@@ -270,11 +270,11 @@ Memory target for `2560x1440` JPEG 4:2:0 embedded path:
 | Area | Bytes |
 | --- | ---: |
 | JPEG work arena | 123,024 |
-| JPEG/scaler slice work | 61,440 |
+| JPEG/scaler slice work | 0 for I420, 20,480 for NV12 |
 | Reusable H.264 output chunk buffer | 4,096 |
 | Encoder heap | 191,048 |
 | Static mutable RAM | about 4,529 |
-| Total, excluding compressed JPEG input and `.rodata` | about 390 KiB budget class |
+| Total, excluding compressed JPEG input and `.rodata` | about 330 KiB I420 / 350 KiB NV12 budget class |
 
 Acceptance criteria:
 

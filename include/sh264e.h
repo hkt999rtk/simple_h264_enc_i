@@ -126,6 +126,11 @@ sh264e_status_t sh264e_resize_make_slice(const sh264e_frame_t *src_frame,
 
 sh264e_status_t sh264e_jpeg_get_slice_buffer_size(size_t *out_size);
 
+sh264e_status_t sh264e_jpeg_get_slice_work_size(const uint8_t *jpeg_data,
+                                                size_t jpeg_size,
+                                                sh264e_pixfmt_t pixfmt,
+                                                size_t *out_size);
+
 sh264e_status_t sh264e_jpeg_get_work_size(const uint8_t *jpeg_data,
                                           size_t jpeg_size,
                                           size_t *out_size);

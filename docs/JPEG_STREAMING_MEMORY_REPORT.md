@@ -13,7 +13,8 @@ from the earlier allocation report. The production measurements below are from
 | Source JPEG | Previous full component planes | Production arena work | Production peak allocation | Streaming row cache | Slice work buffer |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 1280x720 4:2:0 | 1,382,400 | 92,304 | 92,160 | 61,440 | 61,440 |
-| 2560x1440 4:2:0, 1:1 fast path | 5,529,600 | 123,024 | 122,880 | 61,440 | 61,440 API capacity |
+| 2560x1440 4:2:0, 1:1 fast path, I420 | 5,529,600 | 123,024 | 122,880 | 61,440 | 0 |
+| 2560x1440 4:2:0, 1:1 fast path, NV12 | 5,529,600 | 123,024 | 122,880 | 61,440 | 20,480 |
 
 `Production peak allocation` now excludes the previous dynamic NanoJPEG VLC
 lookup block. NanoJPEG decodes DHT tables into compact canonical Huffman
@@ -41,13 +42,14 @@ regressing to full component-plane decode. Issue #49 then added the 1:1
 `2560x1440` 4:2:0 fast path, reducing that row cache to one MCU/slice row.
 Custom DHT baseline JPEGs remain supported.
 
-For the 1:1 fast path, the public API still accepts the conservative
-61,440-byte slice work buffer returned by `sh264e_jpeg_get_slice_buffer_size`.
-The effective slice staging used by the implementation is lower:
+For callers that do not yet know JPEG geometry, `sh264e_jpeg_get_slice_buffer_size`
+still returns the conservative 61,440-byte worst-case slice work capacity.
+Callers that have the JPEG bytes should use `sh264e_jpeg_get_slice_work_size`
+to get the path-specific requirement before allocating the slice work buffer:
 
 | Output format | Effective slice work bytes | Notes |
 | --- | ---: | --- |
-| I420 | 0 | Encoder slice planes point directly into the retained MCU-row cache |
+| I420 | 0 | Encoder slice planes point directly into the retained MCU-row cache; `work_buffer` may be `NULL` with zero capacity |
 | NV12 | 20,480 | Luma points into the cache; chroma is interleaved into an 8-row UV staging window |
 
 ## Output Buffer Boundary
@@ -81,15 +83,16 @@ For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
 | Block | Bytes |
 | --- | ---: |
 | JPEG work arena | 123,024 |
-| JPEG/scaler slice work | 61,440 |
+| JPEG/scaler slice work | 0 for I420, 20,480 for NV12 |
 | Reusable H.264 output chunk buffer | 4,096 |
 | Encoder heap | 191,048 |
 | Static mutable RAM | about 4,529 |
-| Rounded planning budget | about 390 KiB |
+| Rounded planning budget | about 330 KiB I420 / 350 KiB NV12 |
 
-The arithmetic subtotal of the rows above is about 384,113 bytes, or about
-375 KiB in binary units. The rounded planning budget is now about 390 KiB for
-this embedded path.
+The I420 arithmetic subtotal of the rows above is about 322,697 bytes, or about
+315 KiB in binary units. The equivalent NV12 subtotal is about 343,177 bytes,
+or about 335 KiB. The rounded planning budget is now about 330 KiB for I420 and
+about 350 KiB for NV12 on this embedded path.
 
 The encoder heap row is measured by `sh264e_encoder_get_memory_report`; see
 `docs/ENCODER_MEMORY_REPORT.md` for the context, bitstream scratch,
@@ -99,7 +102,7 @@ reconstructed-slice, and neighbor-state breakdown.
 
 `tests/run_ffmpeg_integration.py` asserts the exact production arena work,
 peak-allocation, row-cache, effective slice work, reusable output chunk, encoder
-memory report, and one-shot output capacity values for representative JPEG
+memory report, path-specific slice work, and one-shot output capacity values for representative JPEG
 fixtures. It also keeps broader
 color-subsampling coverage that fails if the production arena path regresses to
 full component-plane allocation or if the default JPEG tool path regresses to
@@ -153,7 +156,7 @@ jpeg output buffer bytes: 4096
 jpeg output consumer chunks: 92
 jpeg output chunk buffer bytes: 4096
 jpeg work arena bytes: 123024
-jpeg slice work bytes: 61440
+jpeg slice work bytes: 0
 jpeg effective slice work bytes: 0
 jpeg peak allocation bytes: 122880
 jpeg streaming cache bytes: 61440

@@ -250,6 +250,17 @@ int main(void)
     ok &= expect_status("null JPEG work-size output",
                         sh264e_jpeg_get_work_size((const uint8_t *)"x", 1u, NULL),
                         SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("null JPEG slice-work input",
+                        sh264e_jpeg_get_slice_work_size(NULL, 1u, SH264E_PIXFMT_I420, &jpeg_work_size),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("null JPEG slice-work output",
+                        sh264e_jpeg_get_slice_work_size((const uint8_t *)"x", 1u,
+                                                        SH264E_PIXFMT_I420, NULL),
+                        SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("unsupported JPEG slice-work format",
+                        sh264e_jpeg_get_slice_work_size((const uint8_t *)"x", 1u,
+                                                        (sh264e_pixfmt_t)99, &jpeg_work_size),
+                        SH264E_ERR_UNSUPPORTED_CONFIG);
     ok &= expect_status("null JPEG arena encode",
                         sh264e_encode_jpeg_idr_with_arena(NULL, NULL, 0u, NULL, 0u,
                                                           NULL, 0u, NULL, 0u, NULL),
