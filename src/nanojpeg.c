@@ -84,6 +84,11 @@
 //                           (default).
 // NJ_CHROMA_FILTER=0      = Use simple pixel repetition for chroma upsampling
 //                           (bad quality, but faster and less code).
+// NJ_DYNAMIC_VLC=1        = Allocate Huffman/VLC decode tables at decode time
+//                           through njAllocMem() instead of keeping them in
+//                           NanoJPEG's static context (default).
+// NJ_DYNAMIC_VLC=0        = Keep VLC tables in static BSS for the original
+//                           NanoJPEG speed/static-allocation tradeoff.
 
 
 // API
@@ -213,6 +218,10 @@ void njDone(void);
     #define NJ_CHROMA_FILTER 1
 #endif
 
+#ifndef NJ_DYNAMIC_VLC
+    #define NJ_DYNAMIC_VLC 1
+#endif
+
 
 ///////////////////////////////////////////////////////////////////////////////
 // EXAMPLE PROGRAM                                                           //
@@ -321,6 +330,10 @@ typedef struct _nj_code {
     unsigned char bits, code;
 } nj_vlc_code_t;
 
+#define NJ_VLC_TABLE_COUNT 4
+#define NJ_VLC_TABLE_SIZE 65536
+#define NJ_VLC_TABLE_BYTES (NJ_VLC_TABLE_COUNT * NJ_VLC_TABLE_SIZE * (int) sizeof(nj_vlc_code_t))
+
 typedef struct _nj_cmp {
     int cid;
     int ssx, ssy;
@@ -344,7 +357,11 @@ typedef struct _nj_ctx {
     nj_component_t comp[3];
     int qtused, qtavail;
     unsigned char qtab[4][64];
-    nj_vlc_code_t vlctab[4][65536];
+#if NJ_DYNAMIC_VLC
+    nj_vlc_code_t (*vlctab)[NJ_VLC_TABLE_SIZE];
+#else
+    nj_vlc_code_t vlctab[NJ_VLC_TABLE_COUNT][NJ_VLC_TABLE_SIZE];
+#endif
     int buf, bufbits;
     int block[64];
     int rstinterval;
@@ -469,6 +486,29 @@ NJ_INLINE void njColIDCT(const int* blk, unsigned char *out, int stride) {
 
 #define njThrow(e) do { nj.error = e; return; } while (0)
 #define njCheckError() do { if (nj.error) return; } while (0)
+
+#if NJ_DYNAMIC_VLC
+NJ_INLINE void njFreeVlcTables(void) {
+    if (nj.vlctab) {
+        njFreeMem((void*) nj.vlctab);
+        nj.vlctab = NULL;
+    }
+}
+
+NJ_INLINE int njEnsureVlcTables(void) {
+    if (!nj.vlctab) {
+        nj.vlctab = (nj_vlc_code_t (*)[NJ_VLC_TABLE_SIZE])
+            njAllocMem(NJ_VLC_TABLE_BYTES);
+        if (nj.vlctab) {
+            njFillMem((void*) nj.vlctab, 0, NJ_VLC_TABLE_BYTES);
+        }
+    }
+    return nj.vlctab != NULL;
+}
+#else
+NJ_INLINE void njFreeVlcTables(void) { }
+NJ_INLINE int njEnsureVlcTables(void) { return 1; }
+#endif
 
 static int njShowBits(int bits) {
     unsigned char newbyte;
@@ -607,6 +647,7 @@ NJ_INLINE void njDecodeDHT(void) {
     static unsigned char counts[16];
     njDecodeLength();
     njCheckError();
+    if (!njEnsureVlcTables()) njThrow(NJ_OUT_OF_MEM);
     while (nj.length >= 17) {
         i = nj.pos[0];
         if (i & 0xEC) njThrow(NJ_SYNTAX_ERROR);
@@ -905,6 +946,7 @@ void njDone(void) {
     for (i = 0;  i < 3;  ++i)
         if (nj.comp[i].pixels) njFreeMem((void*) nj.comp[i].pixels);
     if (nj.rgb) njFreeMem((void*) nj.rgb);
+    njFreeVlcTables();
     njInit();
 }
 
