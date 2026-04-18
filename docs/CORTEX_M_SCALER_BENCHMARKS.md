@@ -23,11 +23,12 @@ The benchmark firmware in `tests/qemu_encoder_bench.c` exercises the
 independent-MB progressive H.264 encoder path on eight deterministic raw I420
 input rows. Each run writes:
 
-* `sh264e_bench_checksum` - nonzero correctness guard over the generated Annex B bytes.
+* `sh264e_bench_checksum` - correctness guard over the generated Annex B bytes.
 * `sh264e_bench_cycles` - DWT cycle count around `sh264e_begin_idr` plus eight `sh264e_encode_idr_slice` calls.
 
 Portable and DSP-capable builds must produce the same checksum for the same
-target fixture. Treat a checksum mismatch as a correctness failure before
+target fixture. The QEMU firmware checks the current expected checksum
+`0x5926e2e5`; treat any checksum mismatch as a correctness failure before
 comparing cycles.
 
 ## QEMU Preflight

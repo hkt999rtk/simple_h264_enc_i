@@ -9,6 +9,7 @@
 #define ROW_OUTPUT_CAPACITY 62080u
 #define SLICE_Y_BYTES ((size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_LUMA_HEIGHT)
 #define SLICE_C_BYTES ((size_t)(SH264E_V1_WIDTH / 2u) * SH264E_V1_SLICE_CHROMA_HEIGHT)
+#define EXPECTED_CHECKSUM 0x5926e2e5u
 
 #define DEMCR (*(volatile uint32_t *)0xE000EDFCu)
 #define DWT_CTRL (*(volatile uint32_t *)0xE0001000u)
@@ -175,7 +176,7 @@ static int run_benchmark(void)
     }
     sh264e_bench_checksum = checksum;
 
-    if (checksum == 0u || sh264e_bench_cycles == 0u) {
+    if (checksum != EXPECTED_CHECKSUM || sh264e_bench_cycles == 0u) {
         return 9;
     }
     return 0;

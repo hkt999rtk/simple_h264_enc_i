@@ -88,9 +88,11 @@ deterministic I420 input rows, caller-provided encoder arena placement, and the
 independent-MB progressive path. It exports the same globals as the scaler
 benchmark:
 
-* `sh264e_bench_checksum` - nonzero correctness guard over the generated Annex B bytes.
+* `sh264e_bench_checksum` - correctness guard over the generated Annex B bytes.
 * `sh264e_bench_cycles` - DWT cycle count around `sh264e_begin_idr` plus eight input-row encode calls.
 
-QEMU rows are correctness/preflight only. Real-board captures must compare the
-default DSP-capable and `SH264E_DISABLE_ARM_DSP` portable variants before using
-cycle data for optimization decisions.
+The encoder QEMU firmware currently expects checksum `0x5926e2e5` for both
+default DSP-capable and portable builds. QEMU rows are correctness/preflight
+only. Real-board captures must compare the default DSP-capable and
+`SH264E_DISABLE_ARM_DSP` portable variants before using cycle data for
+optimization decisions.
