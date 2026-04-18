@@ -95,6 +95,8 @@ Required API entry points:
 * `sh264e_resize_make_slice`
 * `sh264e_jpeg_get_slice_buffer_size`
 * `sh264e_jpeg_get_slice_work_size`
+* `sh264e_jpeg_source_get_slice_work_size`
+* `sh264e_jpeg_source_get_work_size`
 * `sh264e_encode_jpeg_idr`
 * `sh264e_encode_jpeg_idr_with_arena_stream`
 
@@ -110,7 +112,7 @@ Required public API concepts:
 
 The output bitstream buffer is provided by the caller. The library reports bytes written or returns a buffer-too-small error.
 
-Progressive slice mode is the preferred v1 library interface. Frame mode (`sh264e_encode_idr`) remains available as a convenience wrapper around progressive mode. The resize API is part of the core library and produces encoder-sized progressive slices from supported YUV420 source frames. The JPEG API is also part of the core library and decodes memory-input baseline JPEG before resize and IDR encode.
+Progressive slice mode is the preferred v1 library interface. Frame mode (`sh264e_encode_idr`) remains available as a convenience wrapper around progressive mode. The resize API is part of the core library and produces encoder-sized progressive slices from supported YUV420 source frames. The JPEG API is also part of the core library and decodes baseline JPEG from either caller-owned memory or a caller-provided sequential source before resize and IDR encode.
 
 ---
 
@@ -312,7 +314,7 @@ Each scaled output slice is passed directly to `sh264e_encode_idr_slice`.
 The project includes NanoJPEG in the core static library for a direct pipeline:
 
 ```
-JPEG byte buffer
+JPEG byte buffer or sequential source
    ↓
 NanoJPEG MCU-row baseline decode
    ↓
@@ -328,16 +330,45 @@ H.264 IDR slice encode
 ```
 sh264e_jpeg_get_slice_buffer_size
 sh264e_jpeg_get_slice_work_size
+sh264e_jpeg_source_get_slice_work_size
+sh264e_jpeg_get_work_size
+sh264e_jpeg_source_get_work_size
 sh264e_encode_jpeg_idr
 sh264e_encode_jpeg_idr_with_arena
 sh264e_encode_jpeg_idr_with_arena_stream
+sh264e_encode_jpeg_source_idr_with_arena_stream
 sh264e_jpeg_get_last_allocation_stats
 sh264e_jpeg_get_last_streaming_cache_bytes
 sh264e_jpeg_get_last_slice_work_bytes
 sh264e_encoder_get_memory_report
 ```
 
-The JPEG APIs accept a caller-provided JPEG byte buffer. File I/O remains outside the library.
+The JPEG APIs accept either a caller-provided JPEG byte buffer or a sequential
+`sh264e_jpeg_source_t`. File I/O remains outside the library.
+
+The source form is intended for compressed JPEG data stored in flash, storage,
+camera FIFOs, DMA rings, or application-managed chunks. The callback contract is
+pull-only and sequential:
+
+```c
+typedef sh264e_status_t (*sh264e_jpeg_read_fn)(
+    void *user,
+    uint8_t *dst,
+    size_t requested,
+    size_t *out_read);
+```
+
+The callback must write at most `requested` bytes, set `*out_read` to the
+number of bytes copied, and return `SH264E_OK` for successful reads. A successful
+read of `0` bytes means EOF. Returning any other status aborts JPEG decode and
+propagates that status to the caller when possible. Work-size and slice-work
+queries consume the source, so callers must reset or recreate the source before
+each query and before `sh264e_encode_jpeg_source_idr_with_arena_stream`.
+
+NanoJPEG keeps a fixed 512-byte compressed-input window for source-backed
+decode. That window is separate from caller-owned compressed JPEG storage,
+decoded row cache, JPEG arena allocation, slice-work staging, and H.264 output
+buffering.
 
 All public JPEG APIs must decode through MCU-row streaming and must not allocate
 or depend on a full decoded JPEG component frame. `sh264e_encode_jpeg_idr`,
@@ -372,10 +403,11 @@ may implement a consumer that writes to a file.
 JPEG allocations from the last JPEG work-size query or encode call.
 `sh264e_jpeg_get_last_streaming_cache_bytes` reports the decoded row-cache
 capacity retained by the last MCU-row streaming query or encode call.
-`sh264e_jpeg_get_slice_work_size` reports the path-specific caller work-buffer
-capacity for a specific JPEG input and output pixel format. This lets embedded
-callers use zero slice-work bytes for the `2560x1440` 4:2:0 1:1 I420 path and
-20,480 bytes for the equivalent NV12 path, while
+`sh264e_jpeg_get_slice_work_size` and
+`sh264e_jpeg_source_get_slice_work_size` report the path-specific caller
+work-buffer capacity for a specific JPEG input and output pixel format. This
+lets embedded callers use zero slice-work bytes for the `2560x1440` 4:2:0 1:1
+I420 path and 20,480 bytes for the equivalent NV12 path, while
 `sh264e_jpeg_get_slice_buffer_size` remains a conservative worst-case query.
 `sh264e_jpeg_get_last_slice_work_bytes` reports the effective slice staging used
 by the last JPEG encode. These are diagnostic/stat APIs for regression reporting; allocation-limit and
@@ -409,7 +441,7 @@ but no private JPEG test hooks or NanoJPEG full-image decode entry points:
 
 ```sh
 nm -g build-prod/libsimple_h264_enc_i.a | rg "sh264e_jpeg_set_test|streaming_prototype|njDecode([^A-Za-z0-9_]|$)|njDecodeComponents|njGetImage|njGetImageSize|njIsColor" && exit 1 || true
-nm -g build-prod/libsimple_h264_enc_i.a | rg "sh264e_jpeg_get_last_(allocation_stats|streaming_cache_bytes|slice_work_bytes)|sh264e_encoder_get_memory_report"
+nm -g build-prod/libsimple_h264_enc_i.a | rg "sh264e_(jpeg(_source)?_get|encode_jpeg(_source)?).*|sh264e_encoder_get_memory_report"
 ```
 
 The normal CTest suite includes `sh264e_production_profile_symbols` when `nm` or

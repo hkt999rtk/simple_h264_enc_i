@@ -86,6 +86,9 @@ endif()
 
 foreach(required_symbol
         sh264e_encode_jpeg_idr_with_arena_stream
+        sh264e_encode_jpeg_source_idr_with_arena_stream
+        sh264e_jpeg_source_get_work_size
+        sh264e_jpeg_source_get_slice_work_size
         sh264e_jpeg_get_last_allocation_stats
         sh264e_jpeg_get_last_streaming_cache_bytes
         sh264e_jpeg_get_last_slice_work_bytes

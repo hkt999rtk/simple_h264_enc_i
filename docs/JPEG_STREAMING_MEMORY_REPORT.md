@@ -54,9 +54,19 @@ to get the path-specific requirement before allocating the slice work buffer:
 
 ## Output Buffer Boundary
 
-The measurements above separate JPEG decoder/scaler memory from H.264 output
-buffering. A one-shot JPEG API may still require the maximum complete-frame
-H.264 output capacity:
+The measurements above separate JPEG decoder/scaler memory from compressed JPEG
+input storage and H.264 output buffering. The memory-buffer APIs still accept a
+caller-owned contiguous `jpeg_data/jpeg_size` block. The source-backed APIs
+(`sh264e_jpeg_source_get_work_size`,
+`sh264e_jpeg_source_get_slice_work_size`, and
+`sh264e_encode_jpeg_source_idr_with_arena_stream`) let callers stream the
+compressed JPEG through a sequential read callback instead. NanoJPEG holds only
+a fixed 512-byte compressed-input parser/entropy window in its context; callers
+must reset or recreate the source between the work-size query, slice-work query,
+and encode call because each call consumes the source.
+
+A one-shot JPEG API may still require the maximum complete-frame H.264 output
+capacity:
 
 ```text
 header max = 1,024 bytes
@@ -77,8 +87,8 @@ instead of the 11,428,864-byte one-shot maximum output buffer or the old
 file consumer outside the library; tests also cover tiny chunk boundaries to
 lock emulation-prevention behavior across flushes.
 
-For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
-`.rodata`, the current budget is:
+For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input
+storage and `.rodata`, the current budget is:
 
 | Block | Bytes |
 | --- | ---: |
@@ -86,12 +96,12 @@ For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input and
 | JPEG/scaler slice work | 0 for I420, 20,480 for NV12 |
 | Reusable H.264 output chunk buffer | 4,096 |
 | Encoder arena | 191,055 |
-| Static mutable RAM | about 4,529 |
+| Static mutable RAM | about 5,041 |
 | Rounded planning budget | about 330 KiB I420 / 350 KiB NV12 |
 
-The I420 arithmetic subtotal of the rows above is about 322,704 bytes, or about
-315 KiB in binary units. The equivalent NV12 subtotal is about 343,184 bytes,
-or about 335 KiB. The rounded planning budget is now about 330 KiB for I420 and
+The I420 arithmetic subtotal of the rows above is about 323,216 bytes, or about
+316 KiB in binary units. The equivalent NV12 subtotal is about 343,696 bytes,
+or about 336 KiB. The rounded planning budget remains about 330 KiB for I420 and
 about 350 KiB for NV12 on this embedded path.
 
 The encoder arena row is reported by `sh264e_encoder_get_work_size`; see
@@ -102,11 +112,16 @@ reconstructed-slice, neighbor-state breakdown, and arena alignment padding.
 
 `tests/run_ffmpeg_integration.py` asserts the exact production arena work,
 peak-allocation, row-cache, effective slice work, reusable output chunk, encoder
-memory report, path-specific slice work, and one-shot output capacity values for representative JPEG
-fixtures. It also keeps broader
+memory report, path-specific slice work, source-input chunking, and one-shot
+output capacity values for representative JPEG fixtures. It also keeps broader
 color-subsampling coverage that fails if the production arena path regresses to
 full component-plane allocation or if the default JPEG tool path regresses to
 allocating `sh264e_get_max_output_size()` for H.264 output.
+
+The source-input stress cases feed generated JPEGs through chunk limits of 1, 2,
+7, 64, and 1024 bytes. Those cases force marker parsing and entropy decode
+across caller chunk boundaries. When `cjpeg` is available, the restart-marker
+fixture is also encoded through the source API to cover DRI/RST handling.
 
 The normal CTest suite also includes `sh264e_production_profile_symbols` when
 `nm` or `llvm-nm` is available. That check configures the embedded production
@@ -167,6 +182,21 @@ jpeg effective slice work bytes: 0
 jpeg peak allocation bytes: 122880
 jpeg streaming cache bytes: 61440
 jpeg output buffer bytes: 4096
+```
+
+The tool has a hidden integration-test switch for source-backed compressed
+input:
+
+```sh
+build/sh264e_encode_jpeg --test-jpeg-source-chunk-size 7 --format i420 \
+  build/integration/input_720p_yuvj420p.jpg \
+  build/issue52_source_chunk_7.h264
+```
+
+Expected additional metric:
+
+```text
+jpeg source chunk bytes: 7
 ```
 
 The hidden one-shot comparison path remains available for regression tests and

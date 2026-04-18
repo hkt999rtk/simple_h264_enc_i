@@ -12,8 +12,8 @@ implementation.
 
 ## Current Budget
 
-Current `2560x1440` 4:2:0 embedded budget, excluding compressed JPEG input and
-`.rodata`:
+Current `2560x1440` 4:2:0 embedded budget, excluding compressed JPEG input
+storage and `.rodata`:
 
 | Block | Bytes | Notes |
 | --- | ---: | --- |
@@ -21,7 +21,7 @@ Current `2560x1440` 4:2:0 embedded budget, excluding compressed JPEG input and
 | JPEG/scaler slice work | 0 I420 / 20,480 NV12 | Path-specific query for 1:1 4:2:0; conservative unknown-JPEG capacity remains 61,440 |
 | Reusable H.264 output chunk buffer | 4,096 | Byte-stream flush buffer |
 | Encoder arena | 191,055 | Caller-provided placement; see `docs/ENCODER_MEMORY_REPORT.md` |
-| Static mutable RAM | about 4,529 | Excludes `.rodata` |
+| Static mutable RAM | about 5,041 | Excludes `.rodata`; includes NanoJPEG's 512-byte compressed-input window |
 | Total | about 330 KiB I420 / 350 KiB NV12 | Excludes compressed JPEG input |
 
 The old full decoded JPEG component-frame allocation was 5,529,600 bytes for
@@ -160,19 +160,35 @@ Implemented arena contract:
 
 ### #52 Streaming Compressed JPEG Input Source
 
-This is a v2 item. It targets memory currently excluded from the budget: the
-caller-owned compressed JPEG input buffer.
+This is a v2 item. It targets memory previously excluded from the budget: the
+caller-owned contiguous compressed JPEG input buffer.
 
-Current public JPEG APIs accept:
+The original public JPEG APIs still accept:
 
 ```c
 const uint8_t *jpeg_data, size_t jpeg_size
 ```
 
-A future source abstraction may read from flash, storage, camera FIFO, DMA ring,
-or application chunks. This touches NanoJPEG's parser and entropy reader, so it
-should be scheduled after the lower-risk memory reductions unless compressed
-input storage becomes the dominant product constraint.
+The implemented source abstraction reads from flash, storage, camera FIFO, DMA
+ring, or application chunks through:
+
+```c
+typedef sh264e_status_t (*sh264e_jpeg_read_fn)(
+    void *user,
+    uint8_t *dst,
+    size_t requested,
+    size_t *out_read);
+
+typedef struct sh264e_jpeg_source_t {
+    sh264e_jpeg_read_fn read;
+    void *user;
+} sh264e_jpeg_source_t;
+```
+
+The source callback is pull-only and sequential. `0` read bytes signals EOF,
+and work-size/slice-work queries consume the source, so callers must reset or
+recreate it before encode. NanoJPEG now uses a 512-byte compressed-input window
+for source-backed parser and entropy reads.
 
 Acceptance focus:
 
@@ -253,5 +269,6 @@ When an issue changes memory behavior, update the relevant report:
 3. Do #51 after #50.
 4. Do #53 after #49 unless scoped narrowly.
 5. Do #54 any time before firmware integration.
-6. Keep #52 as v2 unless compressed JPEG input storage becomes the top product
-   blocker.
+6. #52 is now the v2 source-input path: follow-up work should focus on
+   production callers that can provide a resettable source around flash,
+   storage, camera FIFO, or DMA-ring input.
