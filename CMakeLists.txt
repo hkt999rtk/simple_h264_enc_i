@@ -171,7 +171,7 @@ if(SH264E_BUILD_TESTS)
             -DSH264E_PROJECT_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_jpeg_diagnostics_boundary.cmake
     )
-    find_program(SH264E_NM nm llvm-nm)
+    find_program(SH264E_NM NAMES nm llvm-nm)
     if(SH264E_NM)
         add_test(
             NAME sh264e_production_profile_symbols
