@@ -4,6 +4,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define TEST_SCALE_FP_BITS 16u
+#define TEST_SCALE_FP_ONE (1u << TEST_SCALE_FP_BITS)
+#define TEST_SCALE_FP_HALF (TEST_SCALE_FP_ONE >> 1u)
+#define TEST_SCALE_FP_BLEND_ROUND ((uint64_t)1u << ((TEST_SCALE_FP_BITS * 2u) - 1u))
+
+typedef struct test_scale_coord_t {
+    uint32_t index;
+    uint32_t fraction;
+} test_scale_coord_t;
+
 static int expect_status(const char *name, sh264e_status_t got, sh264e_status_t expected)
 {
     if (got != expected) {
@@ -229,6 +239,266 @@ static void fill_i420_sized(uint8_t *buf, uint32_t width, uint32_t height)
     }
     memset(buf + y_size, 96, c_size);
     memset(buf + y_size + c_size, 176, c_size);
+}
+
+static void fill_nv12_sized(uint8_t *buf, uint32_t width, uint32_t height)
+{
+    const size_t y_size = (size_t)width * height;
+    uint32_t y;
+    uint32_t x;
+
+    for (y = 0; y < height; y++) {
+        uint8_t *row = buf + (size_t)y * width;
+        for (x = 0; x < width; x++) {
+            row[x] = (uint8_t)((x * 7u + y * 11u) & 0xffu);
+        }
+    }
+    for (y = 0; y < height / 2u; y++) {
+        uint8_t *row = buf + y_size + (size_t)y * width;
+        for (x = 0; x < width / 2u; x++) {
+            row[(size_t)x * 2u] = (uint8_t)(64u + ((x * 5u + y * 3u) & 63u));
+            row[(size_t)x * 2u + 1u] = (uint8_t)(144u + ((x * 9u + y * 7u) & 63u));
+        }
+    }
+}
+
+static test_scale_coord_t test_scale_coord(uint32_t src_size, uint32_t dst_size, uint32_t dst_pos)
+{
+    const uint64_t denom = (uint64_t)dst_size * 2u;
+    const uint64_t pos_num = (uint64_t)(2u * dst_pos + 1u) *
+                             (uint64_t)src_size *
+                             (uint64_t)TEST_SCALE_FP_ONE;
+    const int64_t raw_pos = (int64_t)(pos_num / denom) - (int64_t)TEST_SCALE_FP_HALF;
+    const uint64_t max_pos = (uint64_t)(src_size - 1u) * (uint64_t)TEST_SCALE_FP_ONE;
+    test_scale_coord_t coord;
+
+    if (raw_pos <= 0) {
+        coord.index = 0u;
+        coord.fraction = 0u;
+        return coord;
+    }
+    if ((uint64_t)raw_pos >= max_pos) {
+        coord.index = src_size - 1u;
+        coord.fraction = 0u;
+        return coord;
+    }
+    coord.index = (uint32_t)((uint64_t)raw_pos >> TEST_SCALE_FP_BITS);
+    coord.fraction = (uint32_t)((uint64_t)raw_pos & (uint64_t)(TEST_SCALE_FP_ONE - 1u));
+    return coord;
+}
+
+static uint8_t test_bilinear_blend_u8(uint8_t p00,
+                                      uint8_t p01,
+                                      uint8_t p10,
+                                      uint8_t p11,
+                                      uint32_t wx,
+                                      uint32_t wy)
+{
+    const uint32_t inv_wx = TEST_SCALE_FP_ONE - wx;
+    const uint32_t inv_wy = TEST_SCALE_FP_ONE - wy;
+    const uint64_t top = (uint64_t)p00 * inv_wx + (uint64_t)p01 * wx;
+    const uint64_t bottom = (uint64_t)p10 * inv_wx + (uint64_t)p11 * wx;
+    const uint64_t blended = top * inv_wy + bottom * wy;
+
+    return (uint8_t)((blended + TEST_SCALE_FP_BLEND_ROUND) >> (TEST_SCALE_FP_BITS * 2u));
+}
+
+static void reference_scale_plane_slice(const uint8_t *src,
+                                        uint32_t src_width,
+                                        uint32_t src_height,
+                                        ptrdiff_t src_stride,
+                                        uint8_t *dst,
+                                        uint32_t dst_width,
+                                        uint32_t dst_height,
+                                        uint32_t dst_y_start,
+                                        uint32_t dst_rows,
+                                        ptrdiff_t dst_stride)
+{
+    uint32_t y;
+
+    for (y = 0; y < dst_rows; y++) {
+        const test_scale_coord_t sy = test_scale_coord(src_height, dst_height, dst_y_start + y);
+        const uint32_t y0 = sy.index;
+        const uint32_t y1 = y0 + 1u < src_height ? y0 + 1u : y0;
+        const uint8_t *row0 = src + (size_t)y0 * (size_t)src_stride;
+        const uint8_t *row1 = src + (size_t)y1 * (size_t)src_stride;
+        uint8_t *dst_row = dst + (size_t)y * (size_t)dst_stride;
+        uint32_t x;
+
+        for (x = 0; x < dst_width; x++) {
+            const test_scale_coord_t sx = test_scale_coord(src_width, dst_width, x);
+            const uint32_t x0 = sx.index;
+            const uint32_t x1 = x0 + 1u < src_width ? x0 + 1u : x0;
+
+            dst_row[x] = test_bilinear_blend_u8(row0[x0], row0[x1],
+                                                row1[x0], row1[x1],
+                                                sx.fraction, sy.fraction);
+        }
+    }
+}
+
+static void reference_scale_nv12_chroma_slice(const uint8_t *src_uv,
+                                              uint32_t src_chroma_width,
+                                              uint32_t src_chroma_height,
+                                              ptrdiff_t src_stride,
+                                              uint8_t *dst_uv,
+                                              uint32_t dst_y_start)
+{
+    uint32_t y;
+
+    for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
+        const test_scale_coord_t sy = test_scale_coord(src_chroma_height,
+                                                       SH264E_V1_HEIGHT / 2u,
+                                                       dst_y_start + y);
+        const uint32_t y0 = sy.index;
+        const uint32_t y1 = y0 + 1u < src_chroma_height ? y0 + 1u : y0;
+        const uint8_t *row0 = src_uv + (size_t)y0 * (size_t)src_stride;
+        const uint8_t *row1 = src_uv + (size_t)y1 * (size_t)src_stride;
+        uint8_t *dst_row = dst_uv + (size_t)y * SH264E_V1_WIDTH;
+        uint32_t x;
+
+        for (x = 0; x < SH264E_V1_WIDTH / 2u; x++) {
+            const test_scale_coord_t sx = test_scale_coord(src_chroma_width,
+                                                           SH264E_V1_WIDTH / 2u,
+                                                           x);
+            const uint32_t x0 = sx.index;
+            const uint32_t x1 = x0 + 1u < src_chroma_width ? x0 + 1u : x0;
+
+            dst_row[(size_t)x * 2u] =
+                test_bilinear_blend_u8(row0[(size_t)x0 * 2u],
+                                       row0[(size_t)x1 * 2u],
+                                       row1[(size_t)x0 * 2u],
+                                       row1[(size_t)x1 * 2u],
+                                       sx.fraction,
+                                       sy.fraction);
+            dst_row[(size_t)x * 2u + 1u] =
+                test_bilinear_blend_u8(row0[(size_t)x0 * 2u + 1u],
+                                       row0[(size_t)x1 * 2u + 1u],
+                                       row1[(size_t)x0 * 2u + 1u],
+                                       row1[(size_t)x1 * 2u + 1u],
+                                       sx.fraction,
+                                       sy.fraction);
+        }
+    }
+}
+
+static int expect_resize_reference_slice(const char *name,
+                                         uint32_t width,
+                                         uint32_t height,
+                                         sh264e_pixfmt_t pixfmt,
+                                         unsigned slice_index)
+{
+    const size_t src_size = (size_t)width * height * 3u / 2u;
+    const size_t dst_y_size = (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_LUMA_HEIGHT;
+    const size_t dst_c_size = (size_t)(SH264E_V1_WIDTH / 2u) * SH264E_V1_SLICE_CHROMA_HEIGHT;
+    const size_t dst_uv_size = (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT;
+    uint8_t *src = (uint8_t *)malloc(src_size);
+    uint8_t *work = NULL;
+    uint8_t *expected = NULL;
+    sh264e_frame_t frame;
+    sh264e_slice_t slice;
+    size_t work_size = 0u;
+    int ok = 1;
+
+    if (src == NULL) {
+        fprintf(stderr, "%s: source allocation failed\n", name);
+        return 0;
+    }
+    if (pixfmt == SH264E_PIXFMT_I420) {
+        fill_i420_sized(src, width, height);
+    } else {
+        fill_nv12_sized(src, width, height);
+    }
+
+    memset(&frame, 0, sizeof(frame));
+    frame.width = width;
+    frame.height = height;
+    frame.pixfmt = pixfmt;
+    frame.plane[0] = src;
+    frame.stride[0] = width;
+    if (pixfmt == SH264E_PIXFMT_I420) {
+        const size_t y_size = (size_t)width * height;
+        const size_t c_size = (size_t)(width / 2u) * (height / 2u);
+
+        frame.plane[1] = src + y_size;
+        frame.plane[2] = src + y_size + c_size;
+        frame.stride[1] = width / 2u;
+        frame.stride[2] = width / 2u;
+    } else {
+        frame.plane[1] = src + (size_t)width * height;
+        frame.stride[1] = width;
+    }
+
+    if (!expect_status(name, sh264e_resize_get_slice_buffer_size(&frame, &work_size), SH264E_OK)) {
+        free(src);
+        return 0;
+    }
+    work = (uint8_t *)malloc(work_size);
+    expected = (uint8_t *)malloc(work_size);
+    if (work == NULL || expected == NULL) {
+        fprintf(stderr, "%s: work allocation failed\n", name);
+        free(src);
+        free(work);
+        free(expected);
+        return 0;
+    }
+    memset(work, 0xa5, work_size);
+    memset(expected, 0x5a, work_size);
+
+    if (!expect_status(name,
+                       sh264e_resize_make_slice(&frame, slice_index, work, work_size, &slice),
+                       SH264E_OK)) {
+        ok = 0;
+    }
+    if (ok && slice.plane[0] != work) {
+        fprintf(stderr, "%s: scaled output did not use work buffer\n", name);
+        ok = 0;
+    }
+
+    if (ok) {
+        reference_scale_plane_slice(frame.plane[0], width, height, frame.stride[0],
+                                    expected, SH264E_V1_WIDTH, SH264E_V1_HEIGHT,
+                                    slice_index * SH264E_V1_SLICE_LUMA_HEIGHT,
+                                    SH264E_V1_SLICE_LUMA_HEIGHT, SH264E_V1_WIDTH);
+        if (memcmp(slice.plane[0], expected, dst_y_size) != 0) {
+            fprintf(stderr, "%s: luma output differs from reference scaler\n", name);
+            ok = 0;
+        }
+    }
+
+    if (ok && pixfmt == SH264E_PIXFMT_I420) {
+        uint8_t *expected_u = expected + dst_y_size;
+        uint8_t *expected_v = expected_u + dst_c_size;
+
+        reference_scale_plane_slice(frame.plane[1], width / 2u, height / 2u, frame.stride[1],
+                                    expected_u, SH264E_V1_WIDTH / 2u, SH264E_V1_HEIGHT / 2u,
+                                    slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT,
+                                    SH264E_V1_SLICE_CHROMA_HEIGHT, SH264E_V1_WIDTH / 2u);
+        reference_scale_plane_slice(frame.plane[2], width / 2u, height / 2u, frame.stride[2],
+                                    expected_v, SH264E_V1_WIDTH / 2u, SH264E_V1_HEIGHT / 2u,
+                                    slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT,
+                                    SH264E_V1_SLICE_CHROMA_HEIGHT, SH264E_V1_WIDTH / 2u);
+        if (memcmp(slice.plane[1], expected_u, dst_c_size) != 0 ||
+            memcmp(slice.plane[2], expected_v, dst_c_size) != 0) {
+            fprintf(stderr, "%s: I420 chroma output differs from reference scaler\n", name);
+            ok = 0;
+        }
+    } else if (ok) {
+        uint8_t *expected_uv = expected + dst_y_size;
+
+        reference_scale_nv12_chroma_slice(frame.plane[1], width / 2u, height / 2u,
+                                          frame.stride[1], expected_uv,
+                                          slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT);
+        if (memcmp(slice.plane[1], expected_uv, dst_uv_size) != 0) {
+            fprintf(stderr, "%s: NV12 chroma output differs from reference scaler\n", name);
+            ok = 0;
+        }
+    }
+
+    free(src);
+    free(work);
+    free(expected);
+    return ok;
 }
 
 static void make_i420_slice(const uint8_t *input, unsigned slice_index, sh264e_slice_t *slice)
@@ -536,6 +806,17 @@ int main(void)
                                 SH264E_ERR_UNSUPPORTED_CONFIG);
         }
     }
+
+    ok &= expect_resize_reference_slice("2x I420 resize reference",
+                                        1280u, 720u, SH264E_PIXFMT_I420, 0u);
+    ok &= expect_resize_reference_slice("2x NV12 resize reference",
+                                        1280u, 720u, SH264E_PIXFMT_NV12,
+                                        SH264E_V1_SLICE_COUNT - 1u);
+    ok &= expect_resize_reference_slice("0.5x I420 resize reference",
+                                        5120u, 2880u, SH264E_PIXFMT_I420, 37u);
+    ok &= expect_resize_reference_slice("0.5x NV12 resize reference",
+                                        5120u, 2880u, SH264E_PIXFMT_NV12,
+                                        SH264E_V1_SLICE_COUNT - 1u);
 
     memset(&frame, 0, sizeof(frame));
     frame.width = SH264E_V1_WIDTH;
