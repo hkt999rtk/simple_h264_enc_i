@@ -168,6 +168,33 @@ one MCU-row margin so slices at row-window boundaries can still sample the
 previous row. These figures exclude the existing 61,440-byte encoder slice work
 buffer and H.264 output buffer, both of which are already caller-controlled.
 
+## Rolling Row-Cache Bridge
+
+The hidden streaming bridge now derives retained row-cache size from the decoded
+component geometry and the existing fixed-point scaler's per-slice source row
+window. Each component cache is sized to the largest source row span needed by
+any 16-row luma or 8-row chroma output slice, rounded up to that component's
+JPEG MCU-row height plus one MCU-row margin. Decoded MCU rows are copied into
+the rolling component cache, and slices are encoded as soon as all source rows
+for the next output slice are available.
+
+The bridge keeps the public JPEG API unchanged and keeps the default
+arena-backed JPEG encode path on the component-plane implementation. Issue #20
+owns switching that production entry point to the streaming bridge.
+
+Measured bridge contract:
+
+| Source | Streaming row cache | Slice work buffer |
+| --- | ---: | ---: |
+| 1280x720 4:2:0 | 61,440 | 61,440 |
+| 1280x720 4:2:2 | 81,920 | 61,440 |
+| 1280x720 4:4:4 | 122,880 | 61,440 |
+| 2560x1440 4:2:0 | 184,320 | 61,440 |
+
+The integration matrix asserts these row-cache values for color JPEG inputs and
+asserts that the streaming path continues to use the same 61,440-byte scaled
+slice work buffer as the component-plane path.
+
 ## Validation Plan
 
 The prototype adds a tool/test-only path before replacing the default JPEG

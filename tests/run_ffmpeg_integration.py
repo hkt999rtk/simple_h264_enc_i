@@ -10,6 +10,13 @@ SMALL_WIDTH = 1280
 SMALL_HEIGHT = 720
 LARGE_WIDTH = 2560
 LARGE_HEIGHT = 1440
+JPEG_SLICE_WORK_BYTES = WIDTH * 16 + (WIDTH // 2) * 8 * 2
+STREAMING_CACHE_BYTES_720P = {
+    "yuvj420p": 61_440,
+    "yuvj422p": 81_920,
+    "yuvj444p": 122_880,
+}
+STREAMING_CACHE_BYTES_1440P_420 = 184_320
 
 
 def run(cmd):
@@ -256,6 +263,13 @@ def validate_jpeg_restart_markers(path):
         raise RuntimeError(f"{path} is missing JPEG RST markers")
 
 
+def parse_jpeg_metric(stdout, prefix):
+    for line in stdout.splitlines():
+        if line.startswith(prefix):
+            return int(line.rsplit(" ", 1)[1])
+    raise RuntimeError(f"JPEG encoder did not report {prefix!r}: {stdout!r}")
+
+
 def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None):
     command = [args.jpeg_encoder]
     if extra_args:
@@ -266,15 +280,17 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None):
         raise RuntimeError(f"JPEG encoder did not release tracked allocations: {result.stdout!r}")
     if "jpeg work arena bytes:" not in result.stdout:
         raise RuntimeError(f"JPEG encoder did not report work arena size: {result.stdout!r}")
-    for line in result.stdout.splitlines():
-        if line.startswith("jpeg peak allocation bytes:"):
-            if int(line.rsplit(" ", 1)[1]) == 0:
-                raise RuntimeError(f"JPEG encoder reported zero peak allocation bytes: {result.stdout!r}")
-            return
-    raise RuntimeError(f"JPEG encoder did not report peak allocation bytes: {result.stdout!r}")
+    slice_work = parse_jpeg_metric(result.stdout, "jpeg slice work bytes:")
+    if slice_work != JPEG_SLICE_WORK_BYTES:
+        raise RuntimeError(
+            f"JPEG encoder slice work changed: got {slice_work}, expected {JPEG_SLICE_WORK_BYTES}"
+        )
+    peak = parse_jpeg_metric(result.stdout, "jpeg peak allocation bytes:")
+    if peak == 0:
+        raise RuntimeError(f"JPEG encoder reported zero peak allocation bytes: {result.stdout!r}")
 
 
-def encode_jpeg_streaming_prototype(args, fmt, jpeg_input, bitstream):
+def encode_jpeg_streaming_prototype(args, fmt, jpeg_input, bitstream, expected_cache_bytes=None):
     result = run_capture([
         args.jpeg_encoder,
         "--streaming-prototype",
@@ -285,22 +301,24 @@ def encode_jpeg_streaming_prototype(args, fmt, jpeg_input, bitstream):
     ])
     if "jpeg current allocation bytes: 0" not in result.stdout:
         raise RuntimeError(f"streaming JPEG prototype leaked tracked allocations: {result.stdout!r}")
-    peak = None
-    cache = None
-    work = None
-    for line in result.stdout.splitlines():
-        if line.startswith("jpeg work arena bytes:"):
-            work = int(line.rsplit(" ", 1)[1])
-        if line.startswith("jpeg peak allocation bytes:"):
-            peak = int(line.rsplit(" ", 1)[1])
-        if line.startswith("jpeg streaming cache bytes:"):
-            cache = int(line.rsplit(" ", 1)[1])
-    if work is None or work == 0:
+    work = parse_jpeg_metric(result.stdout, "jpeg work arena bytes:")
+    if work == 0:
         raise RuntimeError(f"streaming JPEG prototype did not report arena work size: {result.stdout!r}")
-    if peak is None or peak >= 1382400:
+    slice_work = parse_jpeg_metric(result.stdout, "jpeg slice work bytes:")
+    if slice_work != JPEG_SLICE_WORK_BYTES:
+        raise RuntimeError(
+            f"streaming JPEG prototype slice work changed: got {slice_work}, expected {JPEG_SLICE_WORK_BYTES}"
+        )
+    peak = parse_jpeg_metric(result.stdout, "jpeg peak allocation bytes:")
+    if peak >= 1382400:
         raise RuntimeError(f"streaming JPEG prototype did not reduce NanoJPEG allocation peak: {result.stdout!r}")
-    if cache is None or cache == 0:
+    cache = parse_jpeg_metric(result.stdout, "jpeg streaming cache bytes:")
+    if cache == 0:
         raise RuntimeError(f"streaming JPEG prototype did not report cache bytes: {result.stdout!r}")
+    if expected_cache_bytes is not None and cache != expected_cache_bytes:
+        raise RuntimeError(
+            f"streaming JPEG row cache changed for {jpeg_input}: got {cache}, expected {expected_cache_bytes}"
+        )
 
 
 def main():
@@ -414,7 +432,8 @@ def main():
             jpeg_output = workdir / f"output_jpeg_{pix_fmt}_{fmt}.h264"
             streaming_output = workdir / f"output_jpeg_streaming_{pix_fmt}_{fmt}.h264"
             encode_jpeg(args, fmt, jpeg_input, jpeg_output)
-            encode_jpeg_streaming_prototype(args, fmt, jpeg_input, streaming_output)
+            encode_jpeg_streaming_prototype(args, fmt, jpeg_input, streaming_output,
+                                            STREAMING_CACHE_BYTES_720P[pix_fmt])
             validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
             validate_bitstream(args.ffprobe, args.ffmpeg, streaming_output)
             compare_decoded_i420(args, jpeg_output, streaming_output,
@@ -425,7 +444,8 @@ def main():
     large_streaming_output = workdir / "output_jpeg_streaming_1440p_yuvj420p_i420.h264"
     make_color_jpeg_sized(args, large_jpeg_input, "yuvj420p", LARGE_WIDTH, LARGE_HEIGHT)
     encode_jpeg(args, "i420", large_jpeg_input, large_jpeg_output)
-    encode_jpeg_streaming_prototype(args, "i420", large_jpeg_input, large_streaming_output)
+    encode_jpeg_streaming_prototype(args, "i420", large_jpeg_input, large_streaming_output,
+                                    STREAMING_CACHE_BYTES_1440P_420)
     validate_bitstream(args.ffprobe, args.ffmpeg, large_streaming_output)
     compare_decoded_i420(args, large_jpeg_output, large_streaming_output,
                          "output_jpeg_1440p_yuvj420p_i420_streaming_compare")
@@ -435,7 +455,8 @@ def main():
         make_restart_marker_jpeg(args, restart_jpeg_input)
         restart_streaming_output = workdir / "output_jpeg_streaming_yuvj420p_restart_i420.h264"
         restart_jpeg_output = workdir / "output_jpeg_yuvj420p_restart_i420.h264"
-        encode_jpeg_streaming_prototype(args, "i420", restart_jpeg_input, restart_streaming_output)
+        encode_jpeg_streaming_prototype(args, "i420", restart_jpeg_input, restart_streaming_output,
+                                        STREAMING_CACHE_BYTES_720P["yuvj420p"])
         validate_bitstream(args.ffprobe, args.ffmpeg, restart_streaming_output)
         encode_jpeg(args, "i420", restart_jpeg_input, restart_jpeg_output)
         validate_bitstream(args.ffprobe, args.ffmpeg, restart_jpeg_output)
