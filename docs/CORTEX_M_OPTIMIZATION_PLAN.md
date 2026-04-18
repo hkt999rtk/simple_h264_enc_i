@@ -79,3 +79,20 @@ ctest --test-dir build-qemu -R 'qemu|sh264e_qemu' --output-on-failure
 Performance claims must include real-board DWT cycle data with board, core,
 clock, compiler, flags, cache state, memory placement, checksum, total cycles,
 and cycles per encoded or resized slice.
+
+## Current Benchmark Firmware
+
+The QEMU preflight set now includes scaler smoke/benchmark firmware and H.264
+progressive encoder benchmark firmware. The encoder benchmark uses eight
+deterministic I420 input rows, caller-provided encoder arena placement, and the
+independent-MB progressive path. It exports the same globals as the scaler
+benchmark:
+
+* `sh264e_bench_checksum` - correctness guard over the generated Annex B bytes.
+* `sh264e_bench_cycles` - DWT cycle count around `sh264e_begin_idr` plus eight input-row encode calls.
+
+The encoder QEMU firmware currently expects checksum `0x5926e2e5` for both
+default DSP-capable and portable builds. QEMU rows are correctness/preflight
+only. Real-board captures must compare the default DSP-capable and
+`SH264E_DISABLE_ARM_DSP` portable variants before using cycle data for
+optimization decisions.
