@@ -70,20 +70,20 @@ capacity:
 
 ```text
 header max = 1,024 bytes
-slice max  = 126,976 bytes
+slice max  = 492,160 bytes
 slice count = 90
-max output = 1,024 + 90 * 126,976 = 11,428,864 bytes
+max output = 1,024 + 90 * 492,160 = 44,295,424 bytes
 ```
 
 This is a caller-owned H.264 output capacity, not JPEG decoder working memory,
 and it does not permit full decoded JPEG component-frame allocation. It is much
-larger than typical encoded output; the measured `2560x1440` JPEG 4:2:0 fixture
-currently emits about 123 KiB of H.264 data.
+larger than typical encoded output; actual output depends on image content and
+the 14,400 one-macroblock IDR slice headers.
 
 The production JPEG tool path now uses the streaming H.264 output consumer API
 and reuses one caller-owned byte-stream flush buffer, currently 4,096 bytes,
-instead of the 11,428,864-byte one-shot maximum output buffer or the old
-126,976-byte one-slice output chunk. The tool writes Annex B chunks through a
+instead of the 44,295,424-byte one-shot maximum output buffer or the old
+492,160-byte one-input-row output chunk. The tool writes Annex B chunks through a
 file consumer outside the library; tests also cover tiny chunk boundaries to
 lock emulation-prevention behavior across flushes.
 
@@ -95,18 +95,18 @@ storage and `.rodata`, the current budget is:
 | JPEG work arena | 123,024 |
 | JPEG/scaler slice work | 0 for I420, 20,480 for NV12 |
 | Reusable H.264 output chunk buffer | 4,096 |
-| Encoder arena | 191,055 |
+| Encoder arena | 2,127 |
 | Static mutable RAM | about 5,041 |
-| Rounded planning budget | about 330 KiB I420 / 350 KiB NV12 |
+| Rounded planning budget | about 135 KiB I420 / 155 KiB NV12 |
 
-The I420 arithmetic subtotal of the rows above is about 323,216 bytes, or about
-316 KiB in binary units. The equivalent NV12 subtotal is about 343,696 bytes,
-or about 336 KiB. The rounded planning budget remains about 330 KiB for I420 and
-about 350 KiB for NV12 on this embedded path.
+The I420 arithmetic subtotal of the rows above is about 134,288 bytes, or about
+131 KiB in binary units. The equivalent NV12 subtotal is about 154,768 bytes,
+or about 151 KiB. The rounded planning budget is about 135 KiB for I420 and
+about 155 KiB for NV12 on this embedded path.
 
 The encoder arena row is reported by `sh264e_encoder_get_work_size`; see
 `docs/ENCODER_MEMORY_REPORT.md` for the raw context, bitstream scratch,
-reconstructed-slice, neighbor-state breakdown, and arena alignment padding.
+and arena alignment padding.
 
 ## Regression Coverage
 

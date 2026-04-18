@@ -6,14 +6,13 @@ This project is intentionally small and narrow in scope:
 
 * C static library built with CMake
 * Single-frame IDR-only H.264 output
-* Current Annex B bitstream output: SPS, PPS, 90 row IDR slices
-* Planned independent-MB output: SPS, PPS, 14,400 independent MB IDR slices
+* Annex B bitstream output: SPS, PPS, 14,400 independent MB IDR slices
 * Fixed v1 resolution: 2560x1440
 * 8-bit YUV420 input: I420 or NV12
 * Baseline / Constrained Baseline compatible CAVLC bitstream
 * No file I/O inside the encoder library
 * Progressive input-row API for lower SRAM footprint and input bandwidth
-* Planned independent macroblock slice mode with no reconstructed-neighbor reference
+* Independent macroblock slice mode with no row reconstructed-neighbor reference
 * Core fixed-point bilinear scaler for resizing source YUV420 into encoder slices
 * Core memory-input and source-input baseline JPEG decode path via NanoJPEG
 
@@ -167,10 +166,10 @@ path reduces retained row cache to 61,440 bytes and requires 0 bytes of
 caller slice work for I420 or 20,480 bytes for NV12.
 `sh264e_encoder_get_memory_report` reports the fixed-v1 encoder heap breakdown
 without creating an encoder; `docs/ENCODER_MEMORY_REPORT.md` records the current
-191,048-byte total and sub-block composition.
+2,120-byte total and sub-block composition.
 Embedded integrations can call `sh264e_encoder_get_work_size` and
 `sh264e_encoder_create_with_arena` to place the same encoder state in a
-caller-provided arena. The fixed-v1 arena size is currently 191,055 bytes,
+caller-provided arena. The fixed-v1 arena size is currently 2,127 bytes,
 including worst-case control-structure alignment padding; `sh264e_encoder_destroy`
 does not free caller-owned arena memory.
 The arena-backed production path now uses MCU-row streaming by default. It keeps only NanoJPEG's current MCU-row buffers and the retained row cache, then feeds one scaled output slice at a time to the progressive encoder.
@@ -182,7 +181,7 @@ placement, but it must not decode the JPEG into a full RGB, grayscale, Y, Cb, or
 Cr component frame. One-shot JPEG APIs may still require a caller-provided
 complete H.264 output buffer; that output model is separate from JPEG decoded
 image memory.
-The JPEG tool uses the streaming H.264 output consumer API for its production arena path, so it flushes the Annex B byte stream as it is produced instead of allocating `sh264e_get_max_output_size()` bytes for the complete frame. For the current 2560x1440 encoder geometry this replaces the 11,428,864-byte one-shot output capacity with a reusable 4,096-byte output chunk buffer. Embedded callers can use the same API to forward chunks to flash, storage, DMA, or a ring buffer without a full-frame or full-slice output buffer.
+The JPEG tool uses the streaming H.264 output consumer API for its production arena path, so it flushes the Annex B byte stream as it is produced instead of allocating `sh264e_get_max_output_size()` bytes for the complete frame. For the current 2560x1440 encoder geometry this replaces the 44,295,424-byte one-shot output capacity with a reusable 4,096-byte output chunk buffer. Embedded callers can use the same API to forward chunks to flash, storage, DMA, or a ring buffer without a full-frame or full-slice output buffer.
 
 For Cortex-M validation, CMake builds QEMU smoke firmware for M3/M4/M7 when the ARM bare-metal toolchain and QEMU are available. CMake first probes whether `arm-none-eabi-gcc` can compile the library's standard-header usage; if the toolchain is only partially installed, QEMU firmware tests are skipped instead of breaking the host build.
 
@@ -280,9 +279,8 @@ sh264e_begin_idr
 sh264e_end_idr
 ```
 
-`sh264e_begin_idr` emits SPS/PPS. The current implementation emits one row
-slice per input-row call. The planned independent-MB mode keeps the same 90
-input-row calls, but each row call emits 160 one-macroblock IDR slice NALUs.
+`sh264e_begin_idr` emits SPS/PPS. The encoder keeps the same 90 input-row
+calls, but each row call emits 160 one-macroblock IDR slice NALUs.
 `sh264e_end_idr` validates completion and emits no bytes.
 
 The legacy frame API remains available and internally offsets full-frame planes into 90 progressive slice calls.
@@ -300,6 +298,5 @@ The current minimal encoder deliberately does not support:
 * chroma AC or full multi-coefficient residual coding
 * deblocking tuning
 
-The planned independent-MB mode additionally removes reconstructed-neighbor
-intra prediction and the associated reconstructed luma/chroma and neighbor
-state buffers.
+Independent-MB mode removes row reconstructed-neighbor intra prediction and the
+associated reconstructed luma/chroma and neighbor state buffers.
