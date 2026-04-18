@@ -213,6 +213,10 @@ int main(void)
                         sh264e_encode_jpeg_idr_with_arena(NULL, NULL, 0u, NULL, 0u,
                                                           NULL, 0u, NULL, 0u, NULL),
                         SH264E_ERR_INVALID_ARGUMENT);
+    ok &= expect_status("null JPEG stream consumer",
+                        sh264e_encode_jpeg_idr_with_arena_stream(NULL, NULL, 0u, NULL, 0u,
+                                                                 NULL, 0u, NULL, 0u, NULL, NULL),
+                        SH264E_ERR_INVALID_ARGUMENT);
     jpeg_alloc_stats.current_bytes = 123u;
     jpeg_alloc_stats.peak_bytes = 456u;
     ok &= expect_status("initial JPEG allocation stats",

@@ -33,6 +33,8 @@ PRODUCTION_MEMORY_1440P_420 = {
     "peak": 245_760,
     "cache": STREAMING_CACHE_BYTES_1440P_420,
 }
+H264_OUTPUT_CONSUMER_CHUNKS = 1 + 90
+H264_OUTPUT_CHUNK_BYTES = 126_976
 
 
 def run(cmd):
@@ -361,6 +363,29 @@ def encode_jpeg_streaming_prototype(args, fmt, jpeg_input, bitstream, expected_c
         )
 
 
+def encode_jpeg_output_consumer(args, fmt, jpeg_input, bitstream):
+    result = run_capture([
+        args.jpeg_encoder,
+        "--test-output-consumer",
+        "--format",
+        fmt,
+        str(jpeg_input),
+        str(bitstream),
+    ])
+    chunks = parse_jpeg_metric(result.stdout, "jpeg output consumer chunks:")
+    if chunks != H264_OUTPUT_CONSUMER_CHUNKS:
+        raise RuntimeError(
+            f"JPEG output consumer chunk count changed: got {chunks}, expected {H264_OUTPUT_CONSUMER_CHUNKS}"
+        )
+    chunk_bytes = parse_jpeg_metric(result.stdout, "jpeg output chunk buffer bytes:")
+    if chunk_bytes != H264_OUTPUT_CHUNK_BYTES:
+        raise RuntimeError(
+            f"JPEG output consumer chunk capacity changed: got {chunk_bytes}, expected {H264_OUTPUT_CHUNK_BYTES}"
+        )
+    if "jpeg current allocation bytes: 0" not in result.stdout:
+        raise RuntimeError(f"JPEG output consumer leaked tracked allocations: {result.stdout!r}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--encoder", required=True)
@@ -485,6 +510,21 @@ def main():
                         max_peak_bytes=FULL_COMPONENT_BYTES_720P[pix_fmt],
                         expected_work_bytes=expected_work,
                         expected_peak_bytes=expected_peak)
+            if pix_fmt == "yuvj420p" and fmt == "i420":
+                consumer_output = workdir / "output_jpeg_consumer_yuvj420p_i420.h264"
+                encode_jpeg_output_consumer(args, fmt, jpeg_input, consumer_output)
+                validate_bitstream(args.ffprobe, args.ffmpeg, consumer_output)
+                if consumer_output.read_bytes() != jpeg_output.read_bytes():
+                    raise RuntimeError("JPEG output consumer bitstream differs from one-shot output")
+                run_expect_fail([
+                    args.jpeg_encoder,
+                    "--test-output-consumer-fail-after",
+                    "1",
+                    "--format",
+                    fmt,
+                    str(jpeg_input),
+                    str(workdir / "output_jpeg_consumer_fail.h264"),
+                ], stderr_contains="internal error")
             encode_jpeg_streaming_prototype(args, fmt, jpeg_input, streaming_output,
                                             STREAMING_CACHE_BYTES_720P[pix_fmt])
             validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)

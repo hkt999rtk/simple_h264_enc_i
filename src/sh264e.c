@@ -91,6 +91,8 @@ typedef struct sh264e_jpeg_stream_context_t {
     uint8_t *out;
     size_t out_capacity;
     size_t offset;
+    sh264e_output_consumer_t consumer;
+    void *consumer_user;
     size_t cache_bytes;
     unsigned next_slice;
     unsigned idr_started;
@@ -145,7 +147,9 @@ static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *e
                                                              size_t work_buffer_capacity,
                                                              uint8_t *out,
                                                              size_t out_capacity,
-                                                             size_t *out_size);
+                                                             size_t *out_size,
+                                                             sh264e_output_consumer_t consumer,
+                                                             void *consumer_user);
 
 static const uint8_t k_luma4x4_x[16] = {
     0, 4, 0, 4, 8, 12, 8, 12, 0, 4, 0, 4, 8, 12, 8, 12
@@ -1105,6 +1109,39 @@ static sh264e_status_t streaming_copy_current_mcu_row(sh264e_jpeg_stream_context
     return SH264E_OK;
 }
 
+static uint8_t *streaming_output_ptr(sh264e_jpeg_stream_context_t *ctx)
+{
+    if (ctx->consumer != NULL) {
+        return ctx->out;
+    }
+    return ctx->out + ctx->offset;
+}
+
+static size_t streaming_output_capacity(const sh264e_jpeg_stream_context_t *ctx)
+{
+    if (ctx->consumer != NULL) {
+        return ctx->out_capacity;
+    }
+    if (ctx->offset > ctx->out_capacity) {
+        return 0u;
+    }
+    return ctx->out_capacity - ctx->offset;
+}
+
+static sh264e_status_t streaming_emit_output(sh264e_jpeg_stream_context_t *ctx, size_t bytes)
+{
+    sh264e_status_t status;
+
+    if (ctx->consumer != NULL) {
+        status = ctx->consumer(ctx->consumer_user, ctx->out, bytes);
+        if (status != SH264E_OK) {
+            return status;
+        }
+    }
+    ctx->offset += bytes;
+    return SH264E_OK;
+}
+
 static int streaming_mcu_row_ready(int mcu_y, void *user)
 {
     sh264e_jpeg_stream_context_t *ctx = (sh264e_jpeg_stream_context_t *)user;
@@ -1128,11 +1165,16 @@ static int streaming_mcu_row_ready(int mcu_y, void *user)
     }
     if (!ctx->idr_started) {
         size_t bytes = 0u;
-        ctx->status = sh264e_begin_idr(ctx->encoder, ctx->out, ctx->out_capacity, &bytes);
+        ctx->status = sh264e_begin_idr(ctx->encoder,
+                                       streaming_output_ptr(ctx),
+                                       streaming_output_capacity(ctx),
+                                       &bytes);
+        if (ctx->status == SH264E_OK) {
+            ctx->status = streaming_emit_output(ctx, bytes);
+        }
         if (ctx->status != SH264E_OK) {
             return 1;
         }
-        ctx->offset += bytes;
         ctx->idr_started = 1u;
     }
 
@@ -1147,13 +1189,15 @@ static int streaming_mcu_row_ready(int mcu_y, void *user)
             streaming_make_nv12_slice(ctx, ctx->next_slice, &slice);
         }
         ctx->status = sh264e_encode_idr_slice(ctx->encoder, &slice,
-                                              ctx->out + ctx->offset,
-                                              ctx->out_capacity - ctx->offset,
+                                              streaming_output_ptr(ctx),
+                                              streaming_output_capacity(ctx),
                                               &bytes);
+        if (ctx->status == SH264E_OK) {
+            ctx->status = streaming_emit_output(ctx, bytes);
+        }
         if (ctx->status != SH264E_OK) {
             return 1;
         }
-        ctx->offset += bytes;
         ctx->next_slice++;
     }
     return 0;
@@ -2301,7 +2345,34 @@ sh264e_status_t sh264e_encode_jpeg_idr_with_arena(sh264e_encoder_t *encoder,
     return sh264e_encode_jpeg_idr_streaming_impl(encoder, jpeg_data, jpeg_size,
                                                  jpeg_arena, jpeg_arena_size, 1,
                                                  work_buffer, work_buffer_capacity,
-                                                 out, out_capacity, out_size);
+                                                 out, out_capacity, out_size,
+                                                 NULL, NULL);
+}
+
+sh264e_status_t sh264e_encode_jpeg_idr_with_arena_stream(
+    sh264e_encoder_t *encoder,
+    const uint8_t *jpeg_data,
+    size_t jpeg_size,
+    uint8_t *jpeg_arena,
+    size_t jpeg_arena_size,
+    uint8_t *work_buffer,
+    size_t work_buffer_capacity,
+    uint8_t *out_buffer,
+    size_t out_buffer_capacity,
+    sh264e_output_consumer_t consumer,
+    void *consumer_user)
+{
+    size_t ignored_size = 0u;
+
+    if (consumer == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    return sh264e_encode_jpeg_idr_streaming_impl(encoder, jpeg_data, jpeg_size,
+                                                 jpeg_arena, jpeg_arena_size, 1,
+                                                 work_buffer, work_buffer_capacity,
+                                                 out_buffer, out_buffer_capacity,
+                                                 &ignored_size,
+                                                 consumer, consumer_user);
 }
 
 size_t sh264e_jpeg_get_last_streaming_cache_bytes(void)
@@ -2326,7 +2397,9 @@ static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *e
                                                              size_t work_buffer_capacity,
                                                              uint8_t *out,
                                                              size_t out_capacity,
-                                                             size_t *out_size)
+                                                             size_t *out_size,
+                                                             sh264e_output_consumer_t consumer,
+                                                             void *consumer_user)
 {
     sh264e_jpeg_stream_context_t ctx;
     sh264e_status_t status;
@@ -2360,6 +2433,8 @@ static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *e
     ctx.work_buffer = work_buffer;
     ctx.out = out;
     ctx.out_capacity = out_capacity;
+    ctx.consumer = consumer;
+    ctx.consumer_user = consumer_user;
     ctx.status = SH264E_OK;
 
     if (use_arena != 0) {
@@ -2406,7 +2481,8 @@ sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype(sh264e_encoder_t *enc
     return sh264e_encode_jpeg_idr_streaming_impl(encoder, jpeg_data, jpeg_size,
                                                  NULL, 0u, 0,
                                                  work_buffer, work_buffer_capacity,
-                                                 out, out_capacity, out_size);
+                                                 out, out_capacity, out_size,
+                                                 NULL, NULL);
 }
 
 sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype_with_arena(sh264e_encoder_t *encoder,
@@ -2423,7 +2499,8 @@ sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype_with_arena(sh264e_enc
     return sh264e_encode_jpeg_idr_streaming_impl(encoder, jpeg_data, jpeg_size,
                                                  jpeg_arena, jpeg_arena_size, 1,
                                                  work_buffer, work_buffer_capacity,
-                                                 out, out_capacity, out_size);
+                                                 out, out_capacity, out_size,
+                                                 NULL, NULL);
 }
 
 sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,

@@ -65,6 +65,10 @@ typedef struct sh264e_jpeg_allocation_stats_t {
 
 typedef struct sh264e_encoder_t sh264e_encoder_t;
 
+typedef sh264e_status_t (*sh264e_output_consumer_t)(void *user,
+                                                    const uint8_t *data,
+                                                    size_t size);
+
 sh264e_status_t sh264e_encoder_create(const sh264e_config_t *config,
                                       sh264e_encoder_t **out_encoder);
 
@@ -134,6 +138,19 @@ sh264e_status_t sh264e_encode_jpeg_idr_with_arena(sh264e_encoder_t *encoder,
                                                   uint8_t *out,
                                                   size_t out_capacity,
                                                   size_t *out_size);
+
+sh264e_status_t sh264e_encode_jpeg_idr_with_arena_stream(
+    sh264e_encoder_t *encoder,
+    const uint8_t *jpeg_data,
+    size_t jpeg_size,
+    uint8_t *jpeg_arena,
+    size_t jpeg_arena_size,
+    uint8_t *work_buffer,
+    size_t work_buffer_capacity,
+    uint8_t *out_buffer,
+    size_t out_buffer_capacity,
+    sh264e_output_consumer_t consumer,
+    void *consumer_user);
 
 const char *sh264e_status_string(sh264e_status_t status);
 
