@@ -1,0 +1,156 @@
+name: Source release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  linux-validation:
+    name: Linux validation gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Install validation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake \
+            ninja-build \
+            ffmpeg \
+            libjpeg-turbo-progs \
+            gcc-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            qemu-system-arm
+
+      - name: Configure debug validation build
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DSH264E_BUILD_QEMU_TESTS=ON
+
+      - name: Build debug validation targets
+        run: cmake --build build --parallel
+
+      - name: Verify required tests are registered
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N | tee registered-tests.txt
+
+          require_test() {
+            local name="$1"
+            if ! grep -Eq "Test +#[0-9]+: ${name}$" registered-tests.txt; then
+              echo "Required test is not registered: ${name}" >&2
+              exit 1
+            fi
+          }
+
+          require_test sh264e_ffmpeg_integration
+          require_test sh264e_qemu_scaler_bench_m4
+          require_test sh264e_qemu_scaler_bench_m7
+          require_test sh264e_qemu_encoder_bench_m4
+          require_test sh264e_qemu_encoder_bench_m7
+
+      - name: Run debug validation tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Configure production profile
+        run: |
+          cmake -S . -B build-prod -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSH264E_BUILD_TOOLS=OFF \
+            -DSH264E_BUILD_TESTS=OFF \
+            -DSH264E_ENABLE_JPEG_TEST_HOOKS=OFF
+
+      - name: Build production profile
+        run: cmake --build build-prod --parallel
+
+  macos-validation:
+    name: macOS validation gate
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Log toolchain versions
+        run: |
+          xcodebuild -version
+          clang --version
+          cmake --version
+
+      - name: Configure macOS host build
+        run: |
+          cmake -S . -B build-macos \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build macOS host targets
+        run: cmake --build build-macos --parallel
+
+      - name: Run macOS host tests
+        run: ctest --test-dir build-macos --output-on-failure
+
+  release:
+    name: Publish source release
+    runs-on: ubuntu-24.04
+    needs:
+      - linux-validation
+      - macos-validation
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches CMake project version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must match vX.Y.Z, got: ${tag}" >&2
+            exit 1
+          fi
+
+          tag_version="${tag#v}"
+          cmake_version="$(sed -nE 's/^[[:space:]]*project\([[:space:]]*simple_h264_enc_i[[:space:]]+VERSION[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*$/\1/p' CMakeLists.txt)"
+          if [[ -z "${cmake_version}" ]]; then
+            echo "Could not read project(simple_h264_enc_i VERSION X.Y.Z) from CMakeLists.txt" >&2
+            exit 1
+          fi
+
+          if [[ "${tag_version}" != "${cmake_version}" ]]; then
+            echo "Tag version ${tag_version} does not match CMake project version ${cmake_version}" >&2
+            exit 1
+          fi
+
+          echo "VERSION=${tag_version}" >> "${GITHUB_ENV}"
+
+      - name: Create deterministic source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          archive="simple_h264_enc_i-${VERSION}.tar.gz"
+          git archive --format=tar --prefix="simple_h264_enc_i-${VERSION}/" HEAD | gzip -n > "${archive}"
+          sha256sum "${archive}" > "${archive}.sha256"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            "simple_h264_enc_i-${VERSION}.tar.gz" \
+            "simple_h264_enc_i-${VERSION}.tar.gz.sha256" \
+            --target "${GITHUB_SHA}" \
+            --generate-notes
