@@ -128,7 +128,9 @@ real-board DWT timing is still required before making cycle-speed claims.
 ## H.264 Bit-Writer Status
 
 The H.264 RBSP writer uses a byte-oriented pending-byte accumulator. Aligned
-8-bit writes bypass the old per-bit loop, while unaligned Exp-Golomb, CAVLC,
-and RBSP trailing-bit writes still preserve the same MSB-first bit order and
-byte output. The change keeps the one-macroblock RBSP scratch size unchanged so
-downstream Annex B batching can focus on output streaming overhead.
+8-bit writes bypass the old per-bit loop, and Exp-Golomb writes use CLZ-backed
+length calculation with a portable fallback plus batched zero-run writes.
+Unaligned CAVLC and RBSP trailing-bit writes still preserve the same MSB-first
+bit order and byte output. The change keeps the one-macroblock RBSP scratch
+size unchanged so downstream Annex B batching can focus on output streaming
+overhead.

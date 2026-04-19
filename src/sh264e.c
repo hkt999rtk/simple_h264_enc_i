@@ -38,6 +38,23 @@
 #define SH264E_USE_ARM_DSP 1
 #endif
 
+static unsigned sh264e_u32_floor_log2(uint32_t value)
+{
+    if (value == 0u) {
+        return 0u;
+    }
+#if (defined(__GNUC__) || defined(__clang__)) && UINT_MAX == 0xffffffffu
+    return 31u - (unsigned)__builtin_clz(value);
+#else
+    unsigned bits = 0u;
+    while (value > 1u) {
+        value >>= 1u;
+        bits++;
+    }
+    return bits;
+#endif
+}
+
 typedef struct sh264e_bit_writer_t {
     uint8_t *data;
     size_t capacity;
@@ -1709,25 +1726,20 @@ static void bw_write_bits(sh264e_bit_writer_t *bw, uint32_t bits, unsigned count
     }
 }
 
+static void bw_write_zero_bits(sh264e_bit_writer_t *bw, unsigned count)
+{
+    while (count > 0u && bw->error == 0) {
+        const unsigned take = count > 32u ? 32u : count;
+        bw_write_bits(bw, 0u, take);
+        count -= take;
+    }
+}
+
 static void bw_write_ue(sh264e_bit_writer_t *bw, uint32_t value)
 {
-    uint32_t code_num = value + 1u;
-    unsigned leading_zero_bits = 0;
-    uint32_t tmp = code_num;
-    while (tmp > 1u) {
-        tmp >>= 1u;
-        leading_zero_bits++;
-    }
-    while (leading_zero_bits > 0u) {
-        bw_write_bit(bw, 0);
-        leading_zero_bits--;
-    }
-    tmp = code_num;
-    leading_zero_bits = 0;
-    while (tmp > 1u) {
-        tmp >>= 1u;
-        leading_zero_bits++;
-    }
+    const uint32_t code_num = value + 1u;
+    const unsigned leading_zero_bits = sh264e_u32_floor_log2(code_num);
+    bw_write_zero_bits(bw, leading_zero_bits);
     bw_write_bits(bw, code_num, leading_zero_bits + 1u);
 }
 
@@ -1745,8 +1757,8 @@ static void bw_write_se(sh264e_bit_writer_t *bw, int32_t value)
 static void bw_rbsp_trailing_bits(sh264e_bit_writer_t *bw)
 {
     bw_write_bit(bw, 1);
-    while (bw->pending_bits != 0u) {
-        bw_write_bit(bw, 0);
+    if (bw->pending_bits != 0u) {
+        bw_write_zero_bits(bw, 8u - bw->pending_bits);
     }
 }
 
@@ -2278,7 +2290,6 @@ static int write_cavlc_level(sh264e_bit_writer_t *bw, int level)
     unsigned prefix;
     unsigned suffix_size = 0u;
     uint32_t suffix = 0u;
-    unsigned i;
 
     if (target < 14u) {
         prefix = (unsigned)target;
@@ -2294,9 +2305,7 @@ static int write_cavlc_level(sh264e_bit_writer_t *bw, int level)
         return 0;
     }
 
-    for (i = 0; i < prefix; i++) {
-        bw_write_bit(bw, 0);
-    }
+    bw_write_zero_bits(bw, prefix);
     bw_write_bit(bw, 1);
     if (suffix_size > 0u) {
         bw_write_bits(bw, suffix, suffix_size);
