@@ -29,6 +29,7 @@ jobs:
             ninja-build \
             ffmpeg \
             libjpeg-turbo-progs \
+            binutils-arm-none-eabi \
             gcc-arm-none-eabi \
             libnewlib-arm-none-eabi \
             qemu-system-arm
@@ -75,3 +76,12 @@ jobs:
 
       - name: Build production profile
         run: cmake --build build-prod --parallel
+
+      - name: Build FreeRTOS Cortex-M7 developer packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -nE 's/^[[:space:]]*project\([[:space:]]*simple_h264_enc_i[[:space:]]+VERSION[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*$/\1/p' CMakeLists.txt)"
+          scripts/build_freertos_cortex_m7_packages.sh \
+            --version "${version}" \
+            --output-dir build/freertos-cortex-m7-packages
