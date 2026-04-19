@@ -1,0 +1,77 @@
+name: Linux validation
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Ubuntu full validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Install validation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake \
+            ninja-build \
+            ffmpeg \
+            libjpeg-turbo-progs \
+            gcc-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            qemu-system-arm
+
+      - name: Configure debug validation build
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DSH264E_BUILD_QEMU_TESTS=ON
+
+      - name: Build debug validation targets
+        run: cmake --build build --parallel
+
+      - name: Verify required tests are registered
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N | tee registered-tests.txt
+
+          require_test() {
+            local name="$1"
+            if ! grep -Eq "Test +#[0-9]+: ${name}$" registered-tests.txt; then
+              echo "Required test is not registered: ${name}" >&2
+              exit 1
+            fi
+          }
+
+          require_test sh264e_ffmpeg_integration
+          require_test sh264e_qemu_scaler_bench_m4
+          require_test sh264e_qemu_scaler_bench_m7
+          require_test sh264e_qemu_encoder_bench_m4
+          require_test sh264e_qemu_encoder_bench_m7
+
+      - name: Run debug validation tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Configure production profile
+        run: |
+          cmake -S . -B build-prod -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSH264E_BUILD_TOOLS=OFF \
+            -DSH264E_BUILD_TESTS=OFF \
+            -DSH264E_ENABLE_JPEG_TEST_HOOKS=OFF
+
+      - name: Build production profile
+        run: cmake --build build-prod --parallel
