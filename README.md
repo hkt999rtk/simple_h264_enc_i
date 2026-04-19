@@ -1,5 +1,9 @@
 # simple_h264_enc_i
 
+[![Linux validation](https://github.com/hkt999rtk/simple_h264_enc_i/actions/workflows/linux-validation.yml/badge.svg)](https://github.com/hkt999rtk/simple_h264_enc_i/actions/workflows/linux-validation.yml)
+[![macOS validation](https://github.com/hkt999rtk/simple_h264_enc_i/actions/workflows/macos-validation.yml/badge.svg)](https://github.com/hkt999rtk/simple_h264_enc_i/actions/workflows/macos-validation.yml)
+[![Source release](https://github.com/hkt999rtk/simple_h264_enc_i/actions/workflows/source-release.yml/badge.svg)](https://github.com/hkt999rtk/simple_h264_enc_i/actions/workflows/source-release.yml)
+
 Minimal C H.264 I-frame encoder library.
 
 This project is intentionally small and narrow in scope:
@@ -108,6 +112,40 @@ The test suite covers:
 * Cortex-M QEMU scaler benchmark firmware correctness for default DSP-capable and portable C variants when those tools are available and usable
 * Cortex-M QEMU encoder benchmark firmware correctness for default DSP-capable and portable C variants when those tools are available and usable
 * production-profile symbol audit when `nm` or `llvm-nm` is available
+
+## CI And Release
+
+Pull requests and `main` pushes run the supported CI validation matrix:
+
+| Workflow | Runner | Coverage |
+| --- | --- | --- |
+| `linux-validation.yml` | `ubuntu-24.04` | Debug CMake/Ninja build, ffmpeg integration, Cortex-M4/M7 QEMU scaler and encoder firmware tests, and Release production-profile build |
+| `macos-validation.yml` | `macos-15` | AppleClang host Debug build and CTest, with Xcode, Clang, and CMake versions logged |
+
+Android and iOS validation are not supported CI targets for this release
+tranche. Cortex-M4/M7 coverage is provided by the Ubuntu QEMU firmware tests,
+not by publishing embedded binaries.
+
+Source releases are created by `source-release.yml` on tags that match
+`v*.*.*`. The release workflow reruns the Linux/QEMU and macOS validation gates,
+verifies the tag `vX.Y.Z` matches
+`project(simple_h264_enc_i VERSION X.Y.Z)` in `CMakeLists.txt`, then publishes
+only:
+
+* `simple_h264_enc_i-${VERSION}.tar.gz`
+* `simple_h264_enc_i-${VERSION}.tar.gz.sha256`
+* generated GitHub release notes
+
+The source archive is produced with `git archive` and `gzip -n` so repeated
+builds of the same commit and version are deterministic.
+
+Release checklist:
+
+1. Update `project(simple_h264_enc_i VERSION X.Y.Z)` in `CMakeLists.txt`.
+2. Merge the release commit to `main`.
+3. Confirm the Linux and macOS CI workflows are green on `main`.
+4. Create and push the matching tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+5. Verify the GitHub Release contains the source archive and SHA-256 checksum.
 
 ## CLI Example
 
