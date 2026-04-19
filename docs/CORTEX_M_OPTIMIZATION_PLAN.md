@@ -137,6 +137,12 @@ The independent-MB slice writer also packs the fixed IDR slice-header tail and
 fixed I_NxN macroblock prefix into constant bit writes while leaving
 `first_mb_in_slice`, coded block pattern, and residual syntax on their variable
 paths. Unaligned CAVLC and RBSP trailing-bit writes still preserve the same
-MSB-first bit order and byte output. These changes keep the one-macroblock RBSP
-scratch size unchanged so downstream Annex B batching can focus on output
-streaming overhead.
+MSB-first bit order and byte output.
+
+The JPEG/output-consumer streaming path now writes each completed IDR
+macroblock-slice RBSP byte directly through the Annex B emulation-prevention
+streamer instead of staging the macroblock in `encoder->rbsp` and replaying it.
+SPS/PPS and caller-buffer progressive APIs still use the 256-byte
+one-macroblock RBSP scratch, so the public encoder memory report and arena size
+stay unchanged. The direct path preserves byte-identical Annex B output and
+consumer failure propagation.

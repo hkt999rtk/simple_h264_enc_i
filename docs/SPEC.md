@@ -432,6 +432,13 @@ tool uses a 4 KiB buffer by default, and smaller buffers are valid for tests or
 tighter embedded integrations. The library must not call file APIs; tools/tests
 may implement a consumer that writes to a file.
 
+For IDR macroblock-slice NALUs, the streaming-output path writes completed RBSP
+bytes directly into the Annex B chunk writer and inserts emulation-prevention
+bytes before flushing to the consumer. It does not allocate a full-frame,
+full-row, or full-NALU output buffer. Consumer callback failures are returned
+from the active encode call and reset the progressive encoder state in the
+JPEG streaming wrapper.
+
 `sh264e_jpeg_get_last_allocation_stats` reports the current and peak tracked
 JPEG allocations from the last JPEG work-size query or encode call.
 `sh264e_jpeg_get_last_streaming_cache_bytes` reports the decoded row-cache

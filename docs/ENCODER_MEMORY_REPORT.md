@@ -72,6 +72,11 @@ not change any encoder-owned memory block or the reported `296` byte total.
 The byte-oriented bit-writer accumulator is internal writer state and does not
 change the `256` byte RBSP scratch block, encoder arena size, or reported
 `296` byte total.
+The streaming output-consumer path bypasses the RBSP scratch for IDR
+macroblock-slice NALUs by sending completed RBSP bytes directly through the
+Annex B emulation-prevention chunk writer. The scratch block remains part of
+the encoder report because SPS/PPS and caller-buffer progressive APIs still use
+it, so the reported total and caller-provided arena size are unchanged.
 
 The JPEG tool prints the same report:
 
