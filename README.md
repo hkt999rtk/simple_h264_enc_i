@@ -128,6 +128,11 @@ tranche. Cortex-M4/M7 validation is provided by the Ubuntu QEMU firmware tests,
 and release assets additionally include Cortex-M7 FreeRTOS static-library
 developer packages.
 
+The Linux validation workflow also uploads the FreeRTOS Cortex-M7 developer
+packages as short-lived GitHub Actions artifacts for integration testing. These
+artifacts are not formal release assets and should not be used as a stable
+distribution channel.
+
 Source releases are created by `source-release.yml` on tags that match
 `v*.*.*`. The release workflow reruns the Linux/QEMU and macOS validation gates,
 verifies the tag `vX.Y.Z` matches

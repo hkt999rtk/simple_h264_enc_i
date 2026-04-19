@@ -85,3 +85,13 @@ jobs:
           scripts/build_freertos_cortex_m7_packages.sh \
             --version "${version}" \
             --output-dir build/freertos-cortex-m7-packages
+
+      - name: Upload FreeRTOS Cortex-M7 developer packages
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: freertos-cortex-m7-packages-${{ github.sha }}
+          path: |
+            build/freertos-cortex-m7-packages/*.tar.gz
+            build/freertos-cortex-m7-packages/*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
