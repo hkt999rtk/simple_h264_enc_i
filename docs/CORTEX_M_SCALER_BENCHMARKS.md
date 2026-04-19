@@ -95,6 +95,28 @@ The runner must treat any nonzero QEMU/firmware exit as a correctness failure
 for that row. Failed rows should not contribute to median/min/max timing unless
 a later issue defines an explicit failed-run reporting policy.
 
+After building the QEMU benchmark firmware, run the proxy timing runner from
+the repository root:
+
+```sh
+python3 tests/run_qemu_proxy_timing.py --build-dir build-qemu --repeat 7
+```
+
+The default target set is:
+
+* `sh264e_qemu_scaler_bench_m4`
+* `sh264e_qemu_scaler_bench_m4_portable`
+* `sh264e_qemu_scaler_bench_m7`
+* `sh264e_qemu_scaler_bench_m7_portable`
+* `sh264e_qemu_encoder_bench_m4`
+* `sh264e_qemu_encoder_bench_m4_portable`
+* `sh264e_qemu_encoder_bench_m7`
+* `sh264e_qemu_encoder_bench_m7_portable`
+
+Use `--target <name>` to run a subset, `--format csv` for machine-readable
+output, and `--list-targets` to print the known target metadata without running
+QEMU. The runner exits nonzero if any selected firmware exits nonzero.
+
 ## Real-Board Capture
 
 Build the same benchmark variants, then flash or load the generated ELF for the

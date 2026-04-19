@@ -215,6 +215,11 @@ merge-blocking absolute threshold unless a later issue defines that policy.
 Use `docs/CORTEX_M_SCALER_BENCHMARKS.md` as the capture checklist and result
 schema for QEMU proxy timing plus real-board portable C versus DSP
 measurements.
+After building the QEMU benchmark firmware, run proxy timing with:
+
+```sh
+python3 tests/run_qemu_proxy_timing.py --build-dir build-qemu --repeat 7
+```
 
 The Cortex-M4/M7 optimization roadmap is tracked in
 `docs/CORTEX_M_OPTIMIZATION_PLAN.md`. Implementation work must wait for its
