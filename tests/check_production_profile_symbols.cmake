@@ -100,6 +100,7 @@ endforeach()
 
 foreach(forbidden_symbol
         sh264e_jpeg_set_test_allocation_limit
+        sh264e_jpeg_get_test_last_exact_resize_mask
         sh264e_encode_jpeg_idr_streaming_prototype
         sh264e_encode_jpeg_idr_streaming_prototype_with_arena
         njDecodeComponents

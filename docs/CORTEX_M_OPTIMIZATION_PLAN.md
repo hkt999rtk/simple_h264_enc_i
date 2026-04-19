@@ -119,6 +119,9 @@ The raw resize API includes exact fixed-ratio fast paths for
 `1280x720 -> 2560x1440` and `5120x2880 -> 2560x1440`. These paths bypass the
 general axis mapper but keep the same half-pixel bilinear samples and rounding,
 so I420 and NV12 slices remain byte-exact with the reference scaler.
+The JPEG MCU-row streaming path now uses the same exact-ratio quarter-step
+sampler for matching 2x and 0.5x source JPEGs while preserving the 1:1
+zero-slice-work path and rolling row-cache behavior.
 The exact-ratio blend now uses quarter-step integer weights. DSP-capable ARM
 builds use `smlad` for both horizontal pair sums and the final vertical pair sum
 in that exact path, while portable builds use the same 32-bit arithmetic.

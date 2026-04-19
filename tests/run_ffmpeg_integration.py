@@ -14,23 +14,29 @@ SMALL_WIDTH = 1280
 SMALL_HEIGHT = 720
 LARGE_WIDTH = 2560
 LARGE_HEIGHT = 1440
+DOWNSCALE_WIDTH = 5120
+DOWNSCALE_HEIGHT = 2880
 JPEG_SLICE_WORK_BYTES = WIDTH * 16 + (WIDTH // 2) * 8 * 2
 JPEG_DIRECT_I420_SLICE_WORK_BYTES = 0
 JPEG_DIRECT_NV12_SLICE_WORK_BYTES = 0
 JPEG_DIRECT_I420_EFFECTIVE_SLICE_WORK_BYTES = 0
 JPEG_DIRECT_NV12_EFFECTIVE_SLICE_WORK_BYTES = 0
+JPEG_EXACT_RESIZE_2X_MASK = 1
+JPEG_EXACT_RESIZE_HALF_MASK = 2
 STREAMING_CACHE_BYTES_720P = {
     "yuvj420p": 61_440,
     "yuvj422p": 81_920,
     "yuvj444p": 122_880,
 }
 STREAMING_CACHE_BYTES_1440P_420 = 61_440
+STREAMING_CACHE_BYTES_2880P_420 = 368_640
 FULL_COMPONENT_BYTES_720P = {
     "yuvj420p": 1_382_400,
     "yuvj422p": 1_843_200,
     "yuvj444p": 2_764_800,
 }
 FULL_COMPONENT_BYTES_1440P_420 = 5_529_600
+FULL_COMPONENT_BYTES_2880P_420 = 22_118_400
 PRODUCTION_MEMORY_720P_420 = {
     "work": 92_304,
     "peak": 92_160,
@@ -40,6 +46,11 @@ PRODUCTION_MEMORY_1440P_420 = {
     "work": 123_024,
     "peak": 122_880,
     "cache": STREAMING_CACHE_BYTES_1440P_420,
+}
+PRODUCTION_MEMORY_2880P_420 = {
+    "work": 491_664,
+    "peak": 491_520,
+    "cache": STREAMING_CACHE_BYTES_2880P_420,
 }
 H264_OUTPUT_CONSUMER_CHUNKS_MIN = 2 + (WIDTH // 16) * (HEIGHT // 16)
 H264_OUTPUT_CHUNK_BYTES = 4_096
@@ -434,7 +445,8 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
                 expected_cache_bytes=None, max_peak_bytes=None,
                 expected_work_bytes=None, expected_peak_bytes=None,
                 expected_slice_work_bytes=None,
-                expected_effective_slice_work_bytes=None):
+                expected_effective_slice_work_bytes=None,
+                expected_exact_resize_mask=None):
     command = [args.jpeg_encoder]
     if extra_args:
         command.extend(extra_args)
@@ -482,6 +494,13 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
         raise RuntimeError(
             f"JPEG encoder default row cache changed for {jpeg_input}: got {cache}, expected {expected_cache_bytes}"
         )
+    if expected_exact_resize_mask is not None:
+        exact_resize_mask = parse_jpeg_metric(result.stdout, "jpeg exact resize mask:")
+        if exact_resize_mask != expected_exact_resize_mask:
+            raise RuntimeError(
+                "JPEG encoder exact resize path changed: "
+                f"got mask {exact_resize_mask}, expected {expected_exact_resize_mask}"
+            )
     if max_peak_bytes is not None and peak >= max_peak_bytes:
         raise RuntimeError(
             f"JPEG encoder default path used full component-plane memory: got peak {peak}, limit {max_peak_bytes}"
@@ -520,7 +539,8 @@ def encode_jpeg_source_chunks(args, fmt, jpeg_input, bitstream, chunk_size,
                               expected_work_bytes=None,
                               expected_peak_bytes=None,
                               expected_slice_work_bytes=None,
-                              expected_effective_slice_work_bytes=None):
+                              expected_effective_slice_work_bytes=None,
+                              expected_exact_resize_mask=None):
     stdout = encode_jpeg(
         args,
         fmt,
@@ -532,6 +552,7 @@ def encode_jpeg_source_chunks(args, fmt, jpeg_input, bitstream, chunk_size,
         expected_peak_bytes=expected_peak_bytes,
         expected_slice_work_bytes=expected_slice_work_bytes,
         expected_effective_slice_work_bytes=expected_effective_slice_work_bytes,
+        expected_exact_resize_mask=expected_exact_resize_mask,
     )
     reported_chunk_size = parse_jpeg_metric(stdout, "jpeg source chunk bytes:")
     if reported_chunk_size != chunk_size:
@@ -542,7 +563,8 @@ def encode_jpeg_source_chunks(args, fmt, jpeg_input, bitstream, chunk_size,
 
 def encode_jpeg_streaming_prototype(args, fmt, jpeg_input, bitstream,
                                     expected_cache_bytes=None,
-                                    expected_slice_work_bytes=None):
+                                    expected_slice_work_bytes=None,
+                                    expected_exact_resize_mask=None):
     result = run_capture([
         args.jpeg_encoder,
         "--streaming-prototype",
@@ -573,6 +595,13 @@ def encode_jpeg_streaming_prototype(args, fmt, jpeg_input, bitstream,
         raise RuntimeError(
             f"streaming JPEG row cache changed for {jpeg_input}: got {cache}, expected {expected_cache_bytes}"
         )
+    if expected_exact_resize_mask is not None:
+        exact_resize_mask = parse_jpeg_metric(result.stdout, "jpeg exact resize mask:")
+        if exact_resize_mask != expected_exact_resize_mask:
+            raise RuntimeError(
+                "streaming JPEG exact resize path changed: "
+                f"got mask {exact_resize_mask}, expected {expected_exact_resize_mask}"
+            )
 
 
 def encode_jpeg_output_consumer(args, fmt, jpeg_input, bitstream, extra_args=None,
@@ -731,7 +760,8 @@ def main():
                         expected_cache_bytes=STREAMING_CACHE_BYTES_720P[pix_fmt],
                         max_peak_bytes=FULL_COMPONENT_BYTES_720P[pix_fmt],
                         expected_work_bytes=expected_work,
-                        expected_peak_bytes=expected_peak)
+                        expected_peak_bytes=expected_peak,
+                        expected_exact_resize_mask=JPEG_EXACT_RESIZE_2X_MASK)
             if pix_fmt == "yuvj420p" and fmt == "i420":
                 one_shot_output = workdir / "output_jpeg_one_shot_yuvj420p_i420.h264"
                 encode_jpeg(args, fmt, jpeg_input, one_shot_output,
@@ -739,7 +769,8 @@ def main():
                             STREAMING_CACHE_BYTES_720P[pix_fmt],
                             FULL_COMPONENT_BYTES_720P[pix_fmt],
                             PRODUCTION_MEMORY_720P_420["work"],
-                            PRODUCTION_MEMORY_720P_420["peak"])
+                            PRODUCTION_MEMORY_720P_420["peak"],
+                            expected_exact_resize_mask=JPEG_EXACT_RESIZE_2X_MASK)
                 validate_bitstream(args.ffprobe, args.ffmpeg, one_shot_output)
                 if jpeg_output.read_bytes() != one_shot_output.read_bytes():
                     raise RuntimeError("JPEG default output consumer bitstream differs from one-shot output")
@@ -773,6 +804,7 @@ def main():
                         STREAMING_CACHE_BYTES_720P[pix_fmt],
                         PRODUCTION_MEMORY_720P_420["work"],
                         PRODUCTION_MEMORY_720P_420["peak"],
+                        expected_exact_resize_mask=JPEG_EXACT_RESIZE_2X_MASK,
                     )
                     validate_bitstream(args.ffprobe, args.ffmpeg, source_output)
                     if source_output.read_bytes() != one_shot_output.read_bytes():
@@ -789,7 +821,8 @@ def main():
                     str(workdir / "output_jpeg_consumer_fail.h264"),
                 ], stderr_contains="internal error")
             encode_jpeg_streaming_prototype(args, fmt, jpeg_input, streaming_output,
-                                            STREAMING_CACHE_BYTES_720P[pix_fmt])
+                                            STREAMING_CACHE_BYTES_720P[pix_fmt],
+                                            expected_exact_resize_mask=JPEG_EXACT_RESIZE_2X_MASK)
             validate_bitstream(args.ffprobe, args.ffmpeg, jpeg_output)
             validate_bitstream(args.ffprobe, args.ffmpeg, streaming_output)
             compare_decoded_i420(args, jpeg_output, streaming_output,
@@ -805,7 +838,8 @@ def main():
                 expected_work_bytes=PRODUCTION_MEMORY_1440P_420["work"],
                 expected_peak_bytes=PRODUCTION_MEMORY_1440P_420["peak"],
                 expected_slice_work_bytes=JPEG_DIRECT_I420_SLICE_WORK_BYTES,
-                expected_effective_slice_work_bytes=JPEG_DIRECT_I420_EFFECTIVE_SLICE_WORK_BYTES)
+                expected_effective_slice_work_bytes=JPEG_DIRECT_I420_EFFECTIVE_SLICE_WORK_BYTES,
+                expected_exact_resize_mask=0)
     large_jpeg_output_nv12 = workdir / "output_jpeg_1440p_yuvj420p_nv12.h264"
     encode_jpeg(args, "nv12", large_jpeg_input, large_jpeg_output_nv12,
                 expected_cache_bytes=STREAMING_CACHE_BYTES_1440P_420,
@@ -813,7 +847,8 @@ def main():
                 expected_work_bytes=PRODUCTION_MEMORY_1440P_420["work"],
                 expected_peak_bytes=PRODUCTION_MEMORY_1440P_420["peak"],
                 expected_slice_work_bytes=JPEG_DIRECT_NV12_SLICE_WORK_BYTES,
-                expected_effective_slice_work_bytes=JPEG_DIRECT_NV12_EFFECTIVE_SLICE_WORK_BYTES)
+                expected_effective_slice_work_bytes=JPEG_DIRECT_NV12_EFFECTIVE_SLICE_WORK_BYTES,
+                expected_exact_resize_mask=0)
     validate_bitstream(args.ffprobe, args.ffmpeg, large_jpeg_output_nv12)
     large_heap_wrapper_output = workdir / "output_jpeg_heap_wrapper_1440p_yuvj420p_i420.h264"
     encode_jpeg(args, "i420", large_jpeg_input, large_heap_wrapper_output,
@@ -822,7 +857,8 @@ def main():
                 max_peak_bytes=FULL_COMPONENT_BYTES_1440P_420,
                 expected_peak_bytes=PRODUCTION_MEMORY_1440P_420["peak"],
                 expected_slice_work_bytes=JPEG_DIRECT_I420_SLICE_WORK_BYTES,
-                expected_effective_slice_work_bytes=JPEG_DIRECT_I420_EFFECTIVE_SLICE_WORK_BYTES)
+                expected_effective_slice_work_bytes=JPEG_DIRECT_I420_EFFECTIVE_SLICE_WORK_BYTES,
+                expected_exact_resize_mask=0)
     validate_bitstream(args.ffprobe, args.ffmpeg, large_heap_wrapper_output)
     if large_heap_wrapper_output.read_bytes() != large_jpeg_output.read_bytes():
         raise RuntimeError("JPEG heap wrapper bitstream differs from arena streaming output")
@@ -833,10 +869,23 @@ def main():
         )
     encode_jpeg_streaming_prototype(args, "i420", large_jpeg_input, large_streaming_output,
                                     STREAMING_CACHE_BYTES_1440P_420,
-                                    JPEG_DIRECT_I420_SLICE_WORK_BYTES)
+                                    JPEG_DIRECT_I420_SLICE_WORK_BYTES,
+                                    expected_exact_resize_mask=0)
     validate_bitstream(args.ffprobe, args.ffmpeg, large_streaming_output)
     compare_decoded_i420(args, large_jpeg_output, large_streaming_output,
                          "output_jpeg_1440p_yuvj420p_i420_streaming_compare")
+
+    downscale_jpeg_input = workdir / "input_2880p_yuvj420p.jpg"
+    make_color_jpeg_sized(args, downscale_jpeg_input, "yuvj420p", DOWNSCALE_WIDTH, DOWNSCALE_HEIGHT)
+    for fmt in ("i420", "nv12"):
+        downscale_output = workdir / f"output_jpeg_2880p_yuvj420p_{fmt}.h264"
+        encode_jpeg(args, fmt, downscale_jpeg_input, downscale_output,
+                    expected_cache_bytes=STREAMING_CACHE_BYTES_2880P_420,
+                    max_peak_bytes=FULL_COMPONENT_BYTES_2880P_420,
+                    expected_work_bytes=PRODUCTION_MEMORY_2880P_420["work"],
+                    expected_peak_bytes=PRODUCTION_MEMORY_2880P_420["peak"],
+                    expected_exact_resize_mask=JPEG_EXACT_RESIZE_HALF_MASK)
+        validate_bitstream(args.ffprobe, args.ffmpeg, downscale_output)
 
     if args.cjpeg:
         restart_jpeg_input = workdir / "input_720p_yuvj420p_restart.jpg"
@@ -844,11 +893,13 @@ def main():
         restart_streaming_output = workdir / "output_jpeg_streaming_yuvj420p_restart_i420.h264"
         restart_jpeg_output = workdir / "output_jpeg_yuvj420p_restart_i420.h264"
         encode_jpeg_streaming_prototype(args, "i420", restart_jpeg_input, restart_streaming_output,
-                                        STREAMING_CACHE_BYTES_720P["yuvj420p"])
+                                        STREAMING_CACHE_BYTES_720P["yuvj420p"],
+                                        expected_exact_resize_mask=JPEG_EXACT_RESIZE_2X_MASK)
         validate_bitstream(args.ffprobe, args.ffmpeg, restart_streaming_output)
         encode_jpeg(args, "i420", restart_jpeg_input, restart_jpeg_output,
                     expected_cache_bytes=STREAMING_CACHE_BYTES_720P["yuvj420p"],
-                    max_peak_bytes=FULL_COMPONENT_BYTES_720P["yuvj420p"])
+                    max_peak_bytes=FULL_COMPONENT_BYTES_720P["yuvj420p"],
+                    expected_exact_resize_mask=JPEG_EXACT_RESIZE_2X_MASK)
         validate_bitstream(args.ffprobe, args.ffmpeg, restart_jpeg_output)
         compare_decoded_i420(args, restart_jpeg_output, restart_streaming_output,
                              "output_jpeg_yuvj420p_restart_i420_streaming_compare")
@@ -860,6 +911,7 @@ def main():
             restart_source_output,
             7,
             STREAMING_CACHE_BYTES_720P["yuvj420p"],
+            expected_exact_resize_mask=JPEG_EXACT_RESIZE_2X_MASK,
         )
         validate_bitstream(args.ffprobe, args.ffmpeg, restart_source_output)
         if restart_source_output.read_bytes() != restart_jpeg_output.read_bytes():
@@ -888,8 +940,10 @@ def main():
     for fmt in ("i420", "nv12"):
         grayscale_jpeg_output = workdir / f"output_jpeg_gray_{fmt}.h264"
         grayscale_streaming_output = workdir / f"output_jpeg_streaming_gray_{fmt}.h264"
-        encode_jpeg(args, fmt, grayscale_jpeg_input, grayscale_jpeg_output)
-        encode_jpeg_streaming_prototype(args, fmt, grayscale_jpeg_input, grayscale_streaming_output)
+        encode_jpeg(args, fmt, grayscale_jpeg_input, grayscale_jpeg_output,
+                    expected_exact_resize_mask=JPEG_EXACT_RESIZE_2X_MASK)
+        encode_jpeg_streaming_prototype(args, fmt, grayscale_jpeg_input, grayscale_streaming_output,
+                                        expected_exact_resize_mask=JPEG_EXACT_RESIZE_2X_MASK)
         validate_bitstream(args.ffprobe, args.ffmpeg, grayscale_jpeg_output)
         validate_bitstream(args.ffprobe, args.ffmpeg, grayscale_streaming_output)
         compare_decoded_i420(args, grayscale_jpeg_output, grayscale_streaming_output,

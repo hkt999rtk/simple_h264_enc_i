@@ -174,6 +174,10 @@ callers that have not parsed their JPEG yet.
 used by the last JPEG encode. For `2560x1440` 4:2:0 source JPEGs, the 1:1 fast
 path reduces retained row cache to 61,440 bytes and requires 0 bytes of
 caller slice work for both I420 and NV12.
+For `1280x720` and `5120x2880` 4:2:0 source JPEGs, the streaming JPEG scaler
+uses the same exact 2x and 0.5x quarter-step paths as the raw resize API while
+still retaining only the rolling MCU-row cache plus one encoder slice work
+buffer.
 `sh264e_encoder_get_memory_report` reports the fixed-v1 encoder heap breakdown
 without creating an encoder; `docs/ENCODER_MEMORY_REPORT.md` records the current
 296-byte total and sub-block composition.

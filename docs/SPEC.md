@@ -302,6 +302,9 @@ The library scaler implementation must use fixed-point integer arithmetic for co
 Exact `2x` and `0.5x` source-to-target ratios may use specialized coordinate
 paths that avoid the general mapper. These paths must remain byte-exact with
 the half-pixel bilinear formula above for both I420 and NV12 output.
+The JPEG MCU-row streaming scaler must use the same exact-ratio coordinate and
+quarter-step blend path for matching `1280x720 -> 2560x1440` and
+`5120x2880 -> 2560x1440` inputs without decoding a full component frame.
 
 When compiled for ARM cores with the DSP extension, the bilinear horizontal
 blend may use `smlad`/DSP intrinsics or inline assembly behind a compile-time
@@ -485,6 +488,10 @@ For `2560x1440` 4:2:0 source JPEGs encoded to the fixed target, the JPEG path
 uses a 1:1 fast path. It skips bilinear scaling, keeps one MCU row per
 component, and feeds slices directly from the retained rows without a
 caller-provided slice-work buffer.
+For `1280x720` and `5120x2880` 4:2:0 source JPEGs encoded to the fixed target,
+the JPEG path uses exact 2x and 0.5x scaler paths from the retained MCU-row
+cache. It still emits one encoder-sized slice at a time and must not allocate a
+full decoded component frame.
 
 * I420 JPEG path: Y, U, and V retained rows
 * NV12 JPEG path: Y, Cb, and Cr retained rows through the internal streaming
@@ -728,6 +735,7 @@ Validate:
 * 1:1 resize reports zero work-buffer bytes and bypasses copy
 * Scaled resize reports non-zero work-buffer bytes and emits encoder-sized slices
 * Exact 2x and 0.5x resize paths match the general half-pixel bilinear reference for I420 and NV12
+* JPEG streaming 1280x720 and 5120x2880 4:2:0 inputs dispatch through the exact scaler paths for I420 and NV12 output
 * Invalid resize dimensions fail
 * Cortex-M3/M4/M7 QEMU scaler smoke tests pass when the ARM bare-metal toolchain and QEMU are available
 * Cortex-M4 QEMU scaler benchmark firmware passes correctness checks
