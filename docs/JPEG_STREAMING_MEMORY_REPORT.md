@@ -12,9 +12,10 @@ from the earlier allocation report. The production measurements below are from
 
 | Source JPEG | Previous full component planes | Production arena work | Production peak allocation | Streaming row cache | Slice work buffer |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 1280x720 4:2:0 | 1,382,400 | 92,304 | 92,160 | 61,440 | 61,440 |
+| 1280x720 4:2:0, exact 2x path | 1,382,400 | 92,304 | 92,160 | 61,440 | 61,440 |
 | 2560x1440 4:2:0, 1:1 fast path, I420 | 5,529,600 | 123,024 | 122,880 | 61,440 | 0 |
 | 2560x1440 4:2:0, 1:1 fast path, NV12 | 5,529,600 | 123,024 | 122,880 | 61,440 | 0 |
+| 5120x2880 4:2:0, exact 0.5x path | 22,118,400 | 491,664 | 491,520 | 368,640 | 61,440 |
 
 `Production peak allocation` now excludes the previous dynamic NanoJPEG VLC
 lookup block. NanoJPEG decodes DHT tables into compact canonical Huffman
@@ -40,7 +41,10 @@ For the `2560x1440` 4:2:0 1:1 row, the measured peak breaks down as:
 Issue #31 reduced production peak allocation below the 270 KiB target without
 regressing to full component-plane decode. Issue #49 then added the 1:1
 `2560x1440` 4:2:0 fast path, reducing that row cache to one MCU/slice row.
-Custom DHT baseline JPEGs remain supported.
+Issue #96 routes JPEG streaming scale work through the same exact fixed-ratio
+quarter-step sampler as the raw resize API for `1280x720 -> 2560x1440` and
+`5120x2880 -> 2560x1440`, while preserving the 1:1 zero-slice-work path. Custom
+DHT baseline JPEGs remain supported.
 
 For callers that do not yet know JPEG geometry, `sh264e_jpeg_get_slice_buffer_size`
 still returns the conservative 61,440-byte worst-case slice work capacity.
@@ -115,11 +119,12 @@ and arena alignment padding.
 
 `tests/run_ffmpeg_integration.py` asserts the exact production arena work,
 peak-allocation, row-cache, effective slice work, reusable output chunk, encoder
-memory report, path-specific slice work, source-input chunking, and one-shot
-output capacity values for representative JPEG fixtures. It also keeps broader
-color-subsampling coverage that fails if the production arena path regresses to
-full component-plane allocation or if the default JPEG tool path regresses to
-allocating `sh264e_get_max_output_size()` for H.264 output.
+memory report, path-specific slice work, source-input chunking, exact
+2x/0.5x JPEG scaler dispatch, and one-shot output capacity values for
+representative JPEG fixtures. It also keeps broader color-subsampling coverage
+that fails if the production arena path regresses to full component-plane
+allocation or if the default JPEG tool path regresses to allocating
+`sh264e_get_max_output_size()` for H.264 output.
 
 The source-input stress cases feed generated JPEGs through chunk limits of 1, 2,
 7, 64, and 1024 bytes. Those cases force marker parsing and entropy decode
@@ -161,13 +166,17 @@ build/sh264e_encode_jpeg --format i420 \
 build/sh264e_encode_jpeg --format i420 \
   build/integration/input_1440p_yuvj420p.jpg \
   build/issue21_default_1440_i420.h264
+
+build/sh264e_encode_jpeg --format i420 \
+  build/integration/input_2880p_yuvj420p.jpg \
+  build/issue96_default_2880_i420.h264
 ```
 
 Expected metric lines:
 
 ```text
 1280x720:
-jpeg output consumer chunks: 92
+jpeg output consumer chunks: 14402
 jpeg output chunk buffer bytes: 4096
 jpeg work arena bytes: 92304
 jpeg slice work bytes: 61440
@@ -177,13 +186,23 @@ jpeg streaming cache bytes: 61440
 jpeg output buffer bytes: 4096
 
 2560x1440:
-jpeg output consumer chunks: 92
+jpeg output consumer chunks: 14402
 jpeg output chunk buffer bytes: 4096
 jpeg work arena bytes: 123024
 jpeg slice work bytes: 0
 jpeg effective slice work bytes: 0
 jpeg peak allocation bytes: 122880
 jpeg streaming cache bytes: 61440
+jpeg output buffer bytes: 4096
+
+5120x2880:
+jpeg output consumer chunks: 14402
+jpeg output chunk buffer bytes: 4096
+jpeg work arena bytes: 491664
+jpeg slice work bytes: 61440
+jpeg effective slice work bytes: 61440
+jpeg peak allocation bytes: 491520
+jpeg streaming cache bytes: 368640
 jpeg output buffer bytes: 4096
 ```
 
@@ -214,5 +233,5 @@ build/sh264e_encode_jpeg --test-one-shot-output --format i420 \
 Expected one-shot output metric:
 
 ```text
-jpeg output buffer bytes: 11428864
+jpeg output buffer bytes: 5588224
 ```

@@ -573,6 +573,9 @@ int main(int argc, char **argv)
         if (streaming_prototype || sh264e_jpeg_get_last_streaming_cache_bytes() != 0u) {
             printf("jpeg streaming cache bytes: %zu\n", sh264e_jpeg_get_last_streaming_cache_bytes());
         }
+#if SH264E_ENABLE_JPEG_TEST_HOOKS
+        printf("jpeg exact resize mask: %u\n", sh264e_jpeg_get_test_last_exact_resize_mask());
+#endif
         if ((one_shot_output_test || allocation_limit != (size_t)-1) && output_capacity != 0u) {
             printf("jpeg output buffer bytes: %zu\n", output_capacity);
         } else if (!streaming_prototype && allocation_limit == (size_t)-1 &&

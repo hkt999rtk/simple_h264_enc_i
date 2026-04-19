@@ -11,6 +11,10 @@ The benchmark firmware in `tests/qemu_scaler_bench.c` exercises
 geometry uses the exact 2x scaler fast path. Each run generates `BENCH_ITERS`
 encoder slices and writes:
 
+The JPEG MCU-row streaming path uses the same exact quarter-step sampler for
+matching 2x and 0.5x JPEG resize cases, but QEMU scaler firmware remains scoped
+to the raw resize API fixture so proxy timing rows stay comparable.
+
 * `sh264e_bench_checksum` - nonzero correctness guard for the generated slices.
 * `sh264e_bench_cycles` - DWT cycle count around the resize loop.
 

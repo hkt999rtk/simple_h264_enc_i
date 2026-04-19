@@ -33,6 +33,8 @@
 #define SH264E_ENCODER_FLAG_OWNS_MEMORY 2u
 #define SH264E_ENCODER_ARENA_ALIGNMENT ((size_t)sizeof(void *))
 #define SH264E_DC_PRED 128
+#define SH264E_JPEG_EXACT_RESIZE_2X_MASK 1u
+#define SH264E_JPEG_EXACT_RESIZE_HALF_MASK 2u
 
 #if !defined(SH264E_DISABLE_ARM_DSP) && defined(__ARM_FEATURE_DSP) && defined(__GNUC__)
 #define SH264E_USE_ARM_DSP 1
@@ -158,6 +160,9 @@ static uint8_t *sh264e_jpeg_alloc_arena;
 static size_t sh264e_jpeg_alloc_arena_capacity;
 static size_t sh264e_jpeg_streaming_last_cache_bytes;
 static size_t sh264e_jpeg_streaming_last_slice_work_bytes;
+#if SH264E_ENABLE_JPEG_TEST_HOOKS
+static unsigned sh264e_jpeg_streaming_last_exact_resize_mask;
+#endif
 
 static void reset_progressive_state(sh264e_encoder_t *encoder);
 static sh264e_status_t sh264e_begin_idr_to_consumer(sh264e_encoder_t *encoder,
@@ -826,6 +831,19 @@ static sh264e_scale_coord_t exact_scale_coord(int mode,
     return coord;
 }
 
+static void streaming_note_exact_scale_mode(int mode)
+{
+#if SH264E_ENABLE_JPEG_TEST_HOOKS
+    if (mode == 1) {
+        sh264e_jpeg_streaming_last_exact_resize_mask |= SH264E_JPEG_EXACT_RESIZE_2X_MASK;
+    } else if (mode == 2) {
+        sh264e_jpeg_streaming_last_exact_resize_mask |= SH264E_JPEG_EXACT_RESIZE_HALF_MASK;
+    }
+#else
+    (void)mode;
+#endif
+}
+
 static void jpeg_fill_i420_neutral_chroma(uint8_t *dst_u, uint8_t *dst_v)
 {
     memset(dst_u, 128, (size_t)SH264E_CHROMA_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT);
@@ -877,6 +895,40 @@ static uint8_t streaming_bilinear_sample_plane(const sh264e_jpeg_stream_componen
     return bilinear_blend_u8(row0[x0], row0[x1], row1[x0], row1[x1], sx.fraction, sy.fraction);
 }
 
+static uint8_t streaming_bilinear_sample_plane_quarter(const sh264e_jpeg_stream_component_t *src,
+                                                       sh264e_scale_coord_t sx,
+                                                       sh264e_scale_coord_t sy)
+{
+    uint32_t y0 = sy.index;
+    uint32_t y1 = y0 + 1u < src->height ? y0 + 1u : y0;
+    const uint32_t x0 = sx.index;
+    const uint32_t x1 = x0 + 1u < src->width ? x0 + 1u : x0;
+    const uint8_t *row0;
+    const uint8_t *row1;
+    const unsigned wx_quarters = sx.fraction >> (SH264E_SCALE_FP_BITS - 2u);
+    const unsigned wy_quarters = sy.fraction >> (SH264E_SCALE_FP_BITS - 2u);
+
+    if (y0 < src->row0) {
+        y0 = src->row0;
+    }
+    if (y1 < src->row0) {
+        y1 = src->row0;
+    }
+    y0 -= src->row0;
+    y1 -= src->row0;
+    if (y0 >= src->rows) {
+        y0 = src->rows - 1u;
+    }
+    if (y1 >= src->rows) {
+        y1 = src->rows - 1u;
+    }
+
+    row0 = src->pixels + (size_t)y0 * (size_t)src->stride;
+    row1 = src->pixels + (size_t)y1 * (size_t)src->stride;
+    return bilinear_blend_quarter_u8(row0[x0], row0[x1], row1[x0], row1[x1],
+                                     wx_quarters, wy_quarters);
+}
+
 static void streaming_scale_component_slice(const sh264e_jpeg_stream_component_t *src,
                                             uint8_t *dst,
                                             uint32_t dst_width,
@@ -885,21 +937,34 @@ static void streaming_scale_component_slice(const sh264e_jpeg_stream_component_t
                                             uint32_t dst_rows,
                                             ptrdiff_t dst_stride)
 {
+    const int exact_mode = exact_scale_ratio_mode(src->width, src->height, dst_width, dst_height);
     sh264e_axis_mapper_t y_mapper = scale_axis_mapper_init(src->height, dst_height, dst_y_start);
     uint32_t y;
 
+    streaming_note_exact_scale_mode(exact_mode);
     for (y = 0; y < dst_rows; y++) {
         uint8_t *dst_row = dst + (size_t)y * (size_t)dst_stride;
-        const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, src->height);
+        const uint32_t dst_y = dst_y_start + y;
+        const sh264e_scale_coord_t sy = exact_mode != 0 ?
+                                        exact_scale_coord(exact_mode, dst_y, dst_height, src->height) :
+                                        scale_coord_from_raw(y_mapper.pos, src->height);
         sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(src->width, dst_width, 0u);
         uint32_t x;
 
         for (x = 0; x < dst_width; x++) {
-            const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, src->width);
-            dst_row[x] = streaming_bilinear_sample_plane(src, sx, sy);
-            scale_axis_mapper_advance(&x_mapper);
+            const sh264e_scale_coord_t sx = exact_mode != 0 ?
+                                            exact_scale_coord(exact_mode, x, dst_width, src->width) :
+                                            scale_coord_from_raw(x_mapper.pos, src->width);
+            dst_row[x] = exact_mode != 0
+                             ? streaming_bilinear_sample_plane_quarter(src, sx, sy)
+                             : streaming_bilinear_sample_plane(src, sx, sy);
+            if (exact_mode == 0) {
+                scale_axis_mapper_advance(&x_mapper);
+            }
         }
-        scale_axis_mapper_advance(&y_mapper);
+        if (exact_mode == 0) {
+            scale_axis_mapper_advance(&y_mapper);
+        }
     }
 }
 
@@ -908,24 +973,48 @@ static void streaming_scale_nv12_component_chroma_slice(const sh264e_jpeg_stream
                                                         uint8_t *dst_uv,
                                                         uint32_t dst_y_start)
 {
+    const int exact_mode = exact_scale_ratio_mode(cb->width,
+                                                 cb->height,
+                                                 SH264E_CHROMA_WIDTH,
+                                                 SH264E_V1_HEIGHT / 2u);
     sh264e_axis_mapper_t y_mapper = scale_axis_mapper_init(cb->height,
                                                            SH264E_V1_HEIGHT / 2u,
                                                            dst_y_start);
     uint32_t y;
 
+    streaming_note_exact_scale_mode(exact_mode);
     for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
         uint8_t *row = dst_uv + (size_t)y * SH264E_V1_WIDTH;
-        const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, cb->height);
+        const uint32_t dst_y = dst_y_start + y;
+        const sh264e_scale_coord_t sy = exact_mode != 0 ?
+                                        exact_scale_coord(exact_mode,
+                                                          dst_y,
+                                                          SH264E_V1_HEIGHT / 2u,
+                                                          cb->height) :
+                                        scale_coord_from_raw(y_mapper.pos, cb->height);
         sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(cb->width, SH264E_CHROMA_WIDTH, 0u);
         uint32_t x;
 
         for (x = 0; x < SH264E_CHROMA_WIDTH; x++) {
-            const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, cb->width);
-            row[(size_t)x * 2u] = streaming_bilinear_sample_plane(cb, sx, sy);
-            row[(size_t)x * 2u + 1u] = streaming_bilinear_sample_plane(cr, sx, sy);
-            scale_axis_mapper_advance(&x_mapper);
+            const sh264e_scale_coord_t sx = exact_mode != 0 ?
+                                            exact_scale_coord(exact_mode,
+                                                              x,
+                                                              SH264E_CHROMA_WIDTH,
+                                                              cb->width) :
+                                            scale_coord_from_raw(x_mapper.pos, cb->width);
+            row[(size_t)x * 2u] = exact_mode != 0
+                                      ? streaming_bilinear_sample_plane_quarter(cb, sx, sy)
+                                      : streaming_bilinear_sample_plane(cb, sx, sy);
+            row[(size_t)x * 2u + 1u] = exact_mode != 0
+                                           ? streaming_bilinear_sample_plane_quarter(cr, sx, sy)
+                                           : streaming_bilinear_sample_plane(cr, sx, sy);
+            if (exact_mode == 0) {
+                scale_axis_mapper_advance(&x_mapper);
+            }
         }
-        scale_axis_mapper_advance(&y_mapper);
+        if (exact_mode == 0) {
+            scale_axis_mapper_advance(&y_mapper);
+        }
     }
 }
 
@@ -2612,6 +2701,9 @@ static sh264e_status_t jpeg_measure_streaming_requirements(const uint8_t *jpeg_d
     }
     sh264e_jpeg_streaming_last_cache_bytes = 0u;
     sh264e_jpeg_streaming_last_slice_work_bytes = 0u;
+#if SH264E_ENABLE_JPEG_TEST_HOOKS
+    sh264e_jpeg_streaming_last_exact_resize_mask = 0u;
+#endif
     if (jpeg_source == NULL && (jpeg_size == 0u || jpeg_size > (size_t)INT_MAX)) {
         return SH264E_ERR_INVALID_ARGUMENT;
     }
@@ -2696,6 +2788,11 @@ sh264e_status_t sh264e_jpeg_source_get_slice_work_size(const sh264e_jpeg_source_
 void sh264e_jpeg_set_test_allocation_limit(size_t max_bytes)
 {
     sh264e_jpeg_alloc_limit = max_bytes;
+}
+
+unsigned sh264e_jpeg_get_test_last_exact_resize_mask(void)
+{
+    return sh264e_jpeg_streaming_last_exact_resize_mask;
 }
 
 #endif
@@ -2824,6 +2921,9 @@ static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *e
     *out_size = 0u;
     sh264e_jpeg_streaming_last_cache_bytes = 0u;
     sh264e_jpeg_streaming_last_slice_work_bytes = 0u;
+#if SH264E_ENABLE_JPEG_TEST_HOOKS
+    sh264e_jpeg_streaming_last_exact_resize_mask = 0u;
+#endif
     if (encoder_idr_active(encoder)) {
         return SH264E_ERR_BAD_STATE;
     }

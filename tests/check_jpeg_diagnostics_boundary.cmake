@@ -27,8 +27,16 @@ if(NOT test_hooks MATCHES "sh264e_jpeg_set_test_allocation_limit[ \t\r\n]*\\(")
     message(FATAL_ERROR "Allocation-limit hook must be test-only")
 endif()
 
+if(NOT test_hooks MATCHES "sh264e_jpeg_get_test_last_exact_resize_mask[ \t\r\n]*\\(")
+    message(FATAL_ERROR "JPEG exact-resize diagnostic hook must be test-only")
+endif()
+
 if(NOT sh264e_source MATCHES "#if SH264E_ENABLE_JPEG_TEST_HOOKS[ \t\r\n]+void[ \t\r\n]+sh264e_jpeg_set_test_allocation_limit")
     message(FATAL_ERROR "Allocation-limit implementation must be test-hook gated")
+endif()
+
+if(NOT sh264e_source MATCHES "#if SH264E_ENABLE_JPEG_TEST_HOOKS[ \t\r\n]+static[ \t\r\n]+unsigned[ \t\r\n]+sh264e_jpeg_streaming_last_exact_resize_mask")
+    message(FATAL_ERROR "JPEG exact-resize diagnostic state must be test-hook gated")
 endif()
 
 if(NOT sh264e_source MATCHES "#if SH264E_ENABLE_JPEG_TEST_HOOKS[ \t\r\n]+sh264e_status_t[ \t\r\n]+sh264e_encode_jpeg_idr_streaming_prototype")

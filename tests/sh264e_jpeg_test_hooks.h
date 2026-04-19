@@ -13,6 +13,8 @@
 
 void sh264e_jpeg_set_test_allocation_limit(size_t max_bytes);
 
+unsigned sh264e_jpeg_get_test_last_exact_resize_mask(void);
+
 sh264e_status_t sh264e_encode_jpeg_idr_streaming_prototype(
     sh264e_encoder_t *encoder,
     const uint8_t *jpeg_data,
