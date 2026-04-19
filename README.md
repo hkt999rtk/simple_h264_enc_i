@@ -111,6 +111,7 @@ The test suite covers:
 * Cortex-M QEMU scaler smoke tests when `arm-none-eabi-gcc` and `qemu-system-arm` are available and usable
 * Cortex-M QEMU scaler benchmark firmware correctness for default DSP-capable and portable C variants when those tools are available and usable
 * Cortex-M QEMU encoder benchmark firmware correctness for default DSP-capable and portable C variants when those tools are available and usable
+* Cortex-M7 simulator DWT/WFI profiling diagnostics through `tests/run_qemu_sim_profile.py`
 * production-profile symbol audit when `nm` or `llvm-nm` is available
 
 ## CI And Release

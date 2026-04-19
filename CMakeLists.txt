@@ -237,6 +237,43 @@ if(SH264E_BUILD_TESTS)
         )
     endif()
 
+    if(SH264E_BUILD_QEMU_TESTS AND SH264E_ARM_NONE_EABI_GCC AND SH264E_QEMU_SYSTEM_ARM)
+        set(SH264E_SIM_PROFILE_ELF ${CMAKE_CURRENT_BINARY_DIR}/sh264e_qemu_sim_profile_m7.elf)
+        add_custom_command(
+            OUTPUT ${SH264E_SIM_PROFILE_ELF}
+            COMMAND ${SH264E_ARM_NONE_EABI_GCC}
+                -mcpu=cortex-m7
+                -mthumb
+                -O2
+                -ffreestanding
+                -fno-builtin
+                -ffunction-sections
+                -fdata-sections
+                -T${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_cortexm.ld
+                -nostdlib
+                -Wl,--gc-sections
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_sim_profile_probe.c
+                -lgcc
+                -o ${SH264E_SIM_PROFILE_ELF}
+            DEPENDS
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_sim_profile_probe.c
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/qemu_cortexm.ld
+            VERBATIM
+        )
+        add_custom_target(sh264e_qemu_sim_profile_m7 ALL DEPENDS ${SH264E_SIM_PROFILE_ELF})
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME sh264e_qemu_sim_profile_m7
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_qemu_sim_profile.py
+                    --build-dir ${CMAKE_CURRENT_BINARY_DIR}
+                    --target sh264e_qemu_sim_profile_m7
+                    --timeout 5
+            )
+            set_tests_properties(sh264e_qemu_sim_profile_m7 PROPERTIES TIMEOUT 10)
+        endif()
+    endif()
+
     if(SH264E_CAN_BUILD_QEMU_TESTS)
         function(sh264e_add_qemu_firmware TARGET_NAME SOURCE CPU MACHINE)
             set(extra_compile_options "")

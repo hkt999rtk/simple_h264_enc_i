@@ -121,6 +121,24 @@ Use `--target <name>` to run a subset, `--format csv` for machine-readable
 output, and `--list-targets` to print the known target metadata without running
 QEMU. The runner exits nonzero if any selected firmware exits nonzero.
 
+## Simulator DWT And WFI Profile
+
+Use `docs/CORTEX_M_SIMULATOR_PROFILE.md` when validating local macOS simulator
+DWT and idle behavior. The `sh264e_qemu_sim_profile_m7` probe is intentionally
+separate from encoder/scaler benchmark firmware and from QEMU proxy timing. It
+checks whether simulator-observed DWT `CYCCNT` advances during active work and
+whether `WFI` resumes from a configured SysTick interrupt.
+
+```sh
+cmake -S . -B build-qemu -DSH264E_BUILD_QEMU_TESTS=ON
+cmake --build build-qemu --target sh264e_qemu_sim_profile_m7
+python3 tests/run_qemu_sim_profile.py --build-dir build-qemu
+```
+
+Simulator profile output is diagnostic only. Do not report it as Cortex-M
+cycles, do not convert it to cycles per slice, and keep it separate from both
+the proxy timing table and the real-board DWT result table.
+
 ## Real-Board Capture
 
 Build the same benchmark variants, then flash or load the generated ELF for the
