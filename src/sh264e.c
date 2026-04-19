@@ -57,23 +57,28 @@ static unsigned sh264e_u32_floor_log2(uint32_t value)
 #endif
 }
 
+typedef struct sh264e_chunk_writer_t sh264e_chunk_writer_t;
+
 typedef struct sh264e_bit_writer_t {
     uint8_t *data;
     size_t capacity;
     size_t byte_pos;
     uint8_t pending_byte;
     unsigned pending_bits;
+    sh264e_chunk_writer_t *annexb_writer;
+    unsigned annexb_zero_count;
+    sh264e_status_t status;
     int error;
 } sh264e_bit_writer_t;
 
-typedef struct sh264e_chunk_writer_t {
+struct sh264e_chunk_writer_t {
     uint8_t *buffer;
     size_t capacity;
     size_t size;
     size_t total;
     sh264e_output_consumer_t consumer;
     void *user;
-} sh264e_chunk_writer_t;
+};
 
 struct sh264e_encoder_t {
     sh264e_config_t config;
@@ -217,6 +222,7 @@ static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *e
                                                              size_t *out_size,
                                                              sh264e_output_consumer_t consumer,
                                                              void *consumer_user);
+static sh264e_status_t chunk_writer_put_byte(sh264e_chunk_writer_t *writer, uint8_t value);
 
 static const uint8_t k_luma4x4_x[16] = {
     0, 4, 0, 4, 8, 12, 8, 12, 0, 4, 0, 4, 8, 12, 8, 12
@@ -1743,6 +1749,9 @@ static void bw_init(sh264e_bit_writer_t *bw, uint8_t *data, size_t capacity)
     bw->byte_pos = 0;
     bw->pending_byte = 0;
     bw->pending_bits = 0;
+    bw->annexb_writer = NULL;
+    bw->annexb_zero_count = 0u;
+    bw->status = SH264E_OK;
     bw->error = 0;
 }
 
@@ -1753,31 +1762,65 @@ static size_t bw_size(const sh264e_bit_writer_t *bw)
 
 static void bw_store_pending(sh264e_bit_writer_t *bw)
 {
+    if (bw->annexb_writer != NULL) {
+        return;
+    }
     if (bw->byte_pos >= bw->capacity) {
         bw->error = 1;
+        bw->status = SH264E_ERR_INTERNAL;
         return;
     }
     bw->data[bw->byte_pos] = bw->pending_byte;
 }
 
-static void bw_commit_pending_byte(sh264e_bit_writer_t *bw)
+static void bw_write_complete_byte(sh264e_bit_writer_t *bw, uint8_t value)
 {
-    bw_store_pending(bw);
-    if (bw->error != 0) {
+    sh264e_status_t status;
+
+    if (bw->annexb_writer != NULL) {
+        if (bw->annexb_zero_count >= 2u && value <= 0x03u) {
+            status = chunk_writer_put_byte(bw->annexb_writer, 0x03u);
+            if (status != SH264E_OK) {
+                bw->status = status;
+                bw->error = 1;
+                return;
+            }
+            bw->annexb_zero_count = 0u;
+        }
+
+        status = chunk_writer_put_byte(bw->annexb_writer, value);
+        if (status != SH264E_OK) {
+            bw->status = status;
+            bw->error = 1;
+            return;
+        }
+        if (value == 0x00u) {
+            bw->annexb_zero_count++;
+        } else {
+            bw->annexb_zero_count = 0u;
+        }
+        bw->byte_pos++;
         return;
     }
-    bw->byte_pos++;
+
+    if (bw->byte_pos >= bw->capacity) {
+        bw->error = 1;
+        bw->status = SH264E_ERR_INTERNAL;
+        return;
+    }
+    bw->data[bw->byte_pos++] = value;
+}
+
+static void bw_commit_pending_byte(sh264e_bit_writer_t *bw)
+{
+    bw_write_complete_byte(bw, bw->pending_byte);
     bw->pending_byte = 0;
     bw->pending_bits = 0;
 }
 
 static void bw_write_aligned_byte(sh264e_bit_writer_t *bw, uint8_t value)
 {
-    if (bw->byte_pos >= bw->capacity) {
-        bw->error = 1;
-        return;
-    }
-    bw->data[bw->byte_pos++] = value;
+    bw_write_complete_byte(bw, value);
 }
 
 static void bw_write_bits(sh264e_bit_writer_t *bw, uint32_t bits, unsigned count);
@@ -2000,6 +2043,33 @@ static sh264e_status_t stream_annexb_nalu(uint8_t *chunk_buffer,
     }
     *out_size = writer.total;
     return SH264E_OK;
+}
+
+static sh264e_status_t bw_begin_annexb_nalu(sh264e_bit_writer_t *bw,
+                                            sh264e_chunk_writer_t *writer,
+                                            uint8_t nal_header)
+{
+    sh264e_status_t status;
+
+    if (bw == NULL || writer == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+
+    bw_init(bw, NULL, 0u);
+    bw->annexb_writer = writer;
+    status = chunk_writer_put_byte(writer, 0x00u);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    status = chunk_writer_put_byte(writer, 0x00u);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    status = chunk_writer_put_byte(writer, 0x01u);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    return chunk_writer_put_byte(writer, nal_header);
 }
 
 static sh264e_status_t append_annexb_nalu(uint8_t *out,
@@ -2438,13 +2508,12 @@ static void write_i_nxn_fixed_prefix(sh264e_bit_writer_t *bw)
     bw_write_bits(bw, 0x3ffffu, SH264E_I_NXN_FIXED_PREFIX_BITS);
 }
 
-static sh264e_status_t write_idr_mb_slice_rbsp(sh264e_encoder_t *encoder,
-                                               const sh264e_slice_t *slice,
-                                               unsigned row_index,
-                                               unsigned mb_x,
-                                               size_t *out_rbsp_size)
+static sh264e_status_t write_idr_mb_slice_payload(sh264e_encoder_t *encoder,
+                                                  const sh264e_slice_t *slice,
+                                                  unsigned row_index,
+                                                  unsigned mb_x,
+                                                  sh264e_bit_writer_t *bw)
 {
-    sh264e_bit_writer_t bw;
     int levels[16];
     int chroma_dc[2];
     unsigned b;
@@ -2452,9 +2521,7 @@ static sh264e_status_t write_idr_mb_slice_rbsp(sh264e_encoder_t *encoder,
     unsigned cbp_chroma;
     unsigned cbp;
 
-    bw_init(&bw, encoder->rbsp, encoder->rbsp_capacity);
-
-    write_idr_mb_slice_header(&bw, row_index * SH264E_MBS_X + mb_x);
+    write_idr_mb_slice_header(bw, row_index * SH264E_MBS_X + mb_x);
 
     for (b = 0; b < 16u; b++) {
         const unsigned x = k_luma4x4_x[b];
@@ -2471,29 +2538,47 @@ static sh264e_status_t write_idr_mb_slice_rbsp(sh264e_encoder_t *encoder,
     cbp_chroma = (chroma_dc[0] != 0 || chroma_dc[1] != 0) ? 1u : 0u;
     cbp = cbp_luma + cbp_chroma * 16u;
 
-    write_i_nxn_fixed_prefix(&bw);
-    bw_write_ue(&bw, k_cbp_intra_code_num[cbp]);
+    write_i_nxn_fixed_prefix(bw);
+    bw_write_ue(bw, k_cbp_intra_code_num[cbp]);
 
     if (cbp != 0u) {
-        bw_write_bit(&bw, 1);                    /* mb_qp_delta: se(0) */
+        bw_write_bit(bw, 1);                     /* mb_qp_delta: se(0) */
         for (b = 0; b < 16u; b++) {
             if ((cbp_luma & (1u << (b / 4u))) != 0u) {
-                write_luma_residual_dc_only(&bw, levels[b], 0u);
+                write_luma_residual_dc_only(bw, levels[b], 0u);
             }
         }
         if (cbp_chroma != 0u) {
-            write_chroma_dc_residual(&bw, chroma_dc[0]);
-            write_chroma_dc_residual(&bw, chroma_dc[1]);
+            write_chroma_dc_residual(bw, chroma_dc[0]);
+            write_chroma_dc_residual(bw, chroma_dc[1]);
         }
     }
 
-    if (bw.error != 0) {
-        return SH264E_ERR_INTERNAL;
+    if (bw->error != 0) {
+        return bw->status != SH264E_OK ? bw->status : SH264E_ERR_INTERNAL;
     }
 
-    bw_rbsp_trailing_bits(&bw);
-    if (bw.error != 0) {
-        return SH264E_ERR_INTERNAL;
+    bw_rbsp_trailing_bits(bw);
+    if (bw->error != 0) {
+        return bw->status != SH264E_OK ? bw->status : SH264E_ERR_INTERNAL;
+    }
+    return SH264E_OK;
+}
+
+static sh264e_status_t write_idr_mb_slice_rbsp(sh264e_encoder_t *encoder,
+                                               const sh264e_slice_t *slice,
+                                               unsigned row_index,
+                                               unsigned mb_x,
+                                               size_t *out_rbsp_size)
+{
+    sh264e_bit_writer_t bw;
+    sh264e_status_t status;
+
+    bw_init(&bw, encoder->rbsp, encoder->rbsp_capacity);
+
+    status = write_idr_mb_slice_payload(encoder, slice, row_index, mb_x, &bw);
+    if (status != SH264E_OK) {
+        return status;
     }
     *out_rbsp_size = bw_size(&bw);
     return SH264E_OK;
@@ -2515,6 +2600,47 @@ static sh264e_status_t make_idr_slice(sh264e_encoder_t *encoder,
         return status;
     }
     return append_annexb_nalu(out, capacity, offset, 0x65u, encoder->rbsp, rbsp_size);
+}
+
+static sh264e_status_t stream_idr_slice_nalu_direct(sh264e_encoder_t *encoder,
+                                                    const sh264e_slice_t *slice,
+                                                    unsigned row_index,
+                                                    unsigned mb_x,
+                                                    uint8_t *chunk_buffer,
+                                                    size_t chunk_capacity,
+                                                    size_t *out_size,
+                                                    sh264e_output_consumer_t consumer,
+                                                    void *consumer_user)
+{
+    sh264e_chunk_writer_t writer;
+    sh264e_bit_writer_t bw;
+    sh264e_status_t status;
+
+    if (chunk_buffer == NULL || out_size == NULL || consumer == NULL ||
+        chunk_capacity == 0u) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+
+    memset(&writer, 0, sizeof(writer));
+    writer.buffer = chunk_buffer;
+    writer.capacity = chunk_capacity;
+    writer.consumer = consumer;
+    writer.user = consumer_user;
+
+    status = bw_begin_annexb_nalu(&bw, &writer, 0x65u);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    status = write_idr_mb_slice_payload(encoder, slice, row_index, mb_x, &bw);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    status = chunk_writer_flush(&writer);
+    if (status != SH264E_OK) {
+        return status;
+    }
+    *out_size = writer.total;
+    return SH264E_OK;
 }
 
 static sh264e_status_t map_jpeg_result(int result)
@@ -3508,16 +3634,10 @@ static sh264e_status_t sh264e_encode_idr_slice_to_consumer_internal(
     {
         unsigned mb_x;
         for (mb_x = 0; mb_x < SH264E_MBS_X; mb_x++) {
-            size_t rbsp_size = 0u;
             size_t nalu_size = 0u;
-            status = write_idr_mb_slice_rbsp(encoder, slice, encoder->slices_encoded,
-                                             mb_x, &rbsp_size);
-            if (status != SH264E_OK) {
-                return status;
-            }
-            status = stream_annexb_nalu(chunk_buffer, chunk_capacity, &nalu_size,
-                                        consumer, consumer_user, 0x65u,
-                                        encoder->rbsp, rbsp_size);
+            status = stream_idr_slice_nalu_direct(encoder, slice, encoder->slices_encoded,
+                                                  mb_x, chunk_buffer, chunk_capacity,
+                                                  &nalu_size, consumer, consumer_user);
             if (status != SH264E_OK) {
                 return status;
             }

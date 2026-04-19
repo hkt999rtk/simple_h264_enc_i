@@ -93,7 +93,9 @@ and reuses one caller-owned byte-stream flush buffer, currently 4,096 bytes,
 instead of the 5,588,224-byte one-shot maximum output buffer or the
 62,080-byte one-input-row output chunk. The tool writes Annex B chunks through a
 file consumer outside the library; tests also cover tiny chunk boundaries to
-lock emulation-prevention behavior across flushes.
+lock emulation-prevention behavior across flushes. IDR macroblock-slice NALUs
+on this path are generated directly into that Annex B chunk stream, so the path
+does not stage a full NALU in the encoder RBSP scratch before flushing.
 
 For the `2560x1440` 4:2:0 embedded path, excluding compressed JPEG input
 storage and `.rodata`, the current budget is:
