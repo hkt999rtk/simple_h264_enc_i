@@ -1,0 +1,39 @@
+name: macOS validation
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS host validation
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Log toolchain versions
+        run: |
+          xcodebuild -version
+          clang --version
+          cmake --version
+
+      - name: Configure macOS host build
+        run: |
+          cmake -S . -B build-macos \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build macOS host targets
+        run: cmake --build build-macos --parallel
+
+      - name: Run macOS host tests
+        run: ctest --test-dir build-macos --output-on-failure
