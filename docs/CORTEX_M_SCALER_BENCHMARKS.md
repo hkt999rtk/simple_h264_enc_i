@@ -56,6 +56,45 @@ CMake intentionally skips these firmware targets when `arm-none-eabi-gcc` or
 `qemu-system-arm` is missing, or when the installed bare-metal toolchain cannot
 compile the standard headers used by the library.
 
+## QEMU Proxy Timing
+
+QEMU proxy timing is a host-side wall-time trend metric for repeated QEMU
+firmware runs. It is separate from QEMU preflight correctness and from
+real-board DWT cycle capture:
+
+* QEMU preflight correctness means build, boot, semihosting exit, and checksum
+  validation through the firmware exit code.
+* QEMU proxy timing means repeated host/QEMU wall-time measurements for the
+  same firmware target on the same host setup.
+* Real-board DWT cycles remain the only authoritative Cortex-M performance
+  data for optimization claims.
+
+Proxy timing reports must label every value as QEMU proxy timing or
+preflight-only wall time. Do not call proxy timing Cortex-M4/M7 cycles, do not
+convert it into cycles per slice, and do not use it as a merge-blocking
+absolute threshold unless a later issue explicitly defines that policy.
+
+The proxy timing runner should report one row per benchmark target and variant
+with these fields:
+
+| Field | Required value |
+| --- | --- |
+| QEMU version | `qemu-system-arm --version` first line |
+| Host OS / CPU | OS version plus CPU model or concise host identifier |
+| Target firmware | CMake target name, for example `sh264e_qemu_encoder_bench_m4` |
+| Machine | QEMU machine model, for example `mps2-an386` or `mps2-an500` |
+| CPU model | QEMU CPU model, for example `cortex-m4` or `cortex-m7` |
+| Variant | default DSP-capable build or `SH264E_DISABLE_ARM_DSP` portable C |
+| Repeat count | Number of QEMU executions included in the statistics |
+| Median wall time | Median elapsed host wall time for successful runs |
+| Min wall time | Fastest elapsed host wall time for successful runs |
+| Max wall time | Slowest elapsed host wall time for successful runs |
+| Checksum status | Pass/fail as determined by firmware exit code |
+
+The runner must treat any nonzero QEMU/firmware exit as a correctness failure
+for that row. Failed rows should not contribute to median/min/max timing unless
+a later issue defines an explicit failed-run reporting policy.
+
 ## Real-Board Capture
 
 Build the same benchmark variants, then flash or load the generated ELF for the
@@ -106,6 +145,23 @@ preflight-only if they are included for traceability.
 | TBD | QEMU preflight | `mps2-an386` | Cortex-M4 | N/A | N/A | emulator default | `arm-none-eabi-gcc -O2 -mcpu=cortex-m4 -mthumb -DSH264E_DISABLE_ARM_DSP` | encoder portable C | TBD | preflight only | preflight only | checksum must match DSP-capable row |
 | TBD | QEMU preflight | `mps2-an500` | Cortex-M7 | N/A | N/A | emulator default | `arm-none-eabi-gcc -O2 -mcpu=cortex-m7 -mthumb` | encoder DSP-capable | TBD | preflight only | preflight only | firmware boot/checksum only |
 | TBD | QEMU preflight | `mps2-an500` | Cortex-M7 | N/A | N/A | emulator default | `arm-none-eabi-gcc -O2 -mcpu=cortex-m7 -mthumb -DSH264E_DISABLE_ARM_DSP` | encoder portable C | TBD | preflight only | preflight only | checksum must match DSP-capable row |
+
+## Proxy Timing Result Table
+
+Proxy timing rows belong in a separate table from real-board DWT rows. This
+table is a schema for the runner/reporting issues; values are host/QEMU wall
+times, not Cortex-M cycles.
+
+| Date | QEMU version | Host OS / CPU | Target firmware | Machine | CPU model | Variant | Repeats | Median wall time | Min wall time | Max wall time | Checksum status | Notes |
+| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |
+| TBD | TBD | TBD | `sh264e_qemu_scaler_bench_m4` | `mps2-an386` | `cortex-m4` | DSP-capable | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
+| TBD | TBD | TBD | `sh264e_qemu_scaler_bench_m4_portable` | `mps2-an386` | `cortex-m4` | portable C | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
+| TBD | TBD | TBD | `sh264e_qemu_scaler_bench_m7` | `mps2-an500` | `cortex-m7` | DSP-capable | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
+| TBD | TBD | TBD | `sh264e_qemu_scaler_bench_m7_portable` | `mps2-an500` | `cortex-m7` | portable C | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
+| TBD | TBD | TBD | `sh264e_qemu_encoder_bench_m4` | `mps2-an386` | `cortex-m4` | DSP-capable | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
+| TBD | TBD | TBD | `sh264e_qemu_encoder_bench_m4_portable` | `mps2-an386` | `cortex-m4` | portable C | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
+| TBD | TBD | TBD | `sh264e_qemu_encoder_bench_m7` | `mps2-an500` | `cortex-m7` | DSP-capable | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
+| TBD | TBD | TBD | `sh264e_qemu_encoder_bench_m7_portable` | `mps2-an500` | `cortex-m7` | portable C | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
 
 ## Tuning Decision
 
