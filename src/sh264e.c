@@ -2413,6 +2413,31 @@ static void write_chroma_dc_residual(sh264e_bit_writer_t *bw, int level)
     bw_write_bit(bw, 1);                 /* total_zeros = 0 for TotalCoeff=1 */
 }
 
+enum {
+    SH264E_IDR_MB_SLICE_FIXED_HEADER_BITS = 23,
+    SH264E_I_NXN_FIXED_PREFIX_BITS = 18
+};
+
+static void write_idr_mb_slice_header(sh264e_bit_writer_t *bw, unsigned first_mb_in_slice)
+{
+    bw_write_ue(bw, first_mb_in_slice);
+    /*
+     * Fixed tail after first_mb_in_slice:
+     * slice_type=I(7), pps=0, frame_num=0, idr_pic_id=0, poc_lsb=0,
+     * ref flags=0, slice_qp_delta=0, disable_deblocking_filter_idc=1.
+     */
+    bw_write_bits(bw, 0x8840au, SH264E_IDR_MB_SLICE_FIXED_HEADER_BITS);
+}
+
+static void write_i_nxn_fixed_prefix(sh264e_bit_writer_t *bw)
+{
+    /*
+     * mb_type=I_NxN (ue(0)), sixteen prev_intra4x4_pred_mode_flag bits set,
+     * and intra_chroma_pred_mode=DC (ue(0)).
+     */
+    bw_write_bits(bw, 0x3ffffu, SH264E_I_NXN_FIXED_PREFIX_BITS);
+}
+
 static sh264e_status_t write_idr_mb_slice_rbsp(sh264e_encoder_t *encoder,
                                                const sh264e_slice_t *slice,
                                                unsigned row_index,
@@ -2429,16 +2454,7 @@ static sh264e_status_t write_idr_mb_slice_rbsp(sh264e_encoder_t *encoder,
 
     bw_init(&bw, encoder->rbsp, encoder->rbsp_capacity);
 
-    bw_write_ue(&bw, row_index * SH264E_MBS_X + mb_x);
-    bw_write_ue(&bw, 7);                 /* slice_type: all I slices */
-    bw_write_ue(&bw, 0);                 /* pic_parameter_set_id */
-    bw_write_bits(&bw, 0, 4);            /* frame_num */
-    bw_write_ue(&bw, 0);                 /* idr_pic_id */
-    bw_write_bits(&bw, 0, 4);            /* pic_order_cnt_lsb */
-    bw_write_bit(&bw, 0);                /* no_output_of_prior_pics_flag */
-    bw_write_bit(&bw, 0);                /* long_term_reference_flag */
-    bw_write_se(&bw, 0);                 /* slice_qp_delta */
-    bw_write_ue(&bw, 1);                 /* disable_deblocking_filter_idc */
+    write_idr_mb_slice_header(&bw, row_index * SH264E_MBS_X + mb_x);
 
     for (b = 0; b < 16u; b++) {
         const unsigned x = k_luma4x4_x[b];
@@ -2455,15 +2471,11 @@ static sh264e_status_t write_idr_mb_slice_rbsp(sh264e_encoder_t *encoder,
     cbp_chroma = (chroma_dc[0] != 0 || chroma_dc[1] != 0) ? 1u : 0u;
     cbp = cbp_luma + cbp_chroma * 16u;
 
-    bw_write_ue(&bw, 0);                         /* mb_type: I_NxN */
-    for (b = 0; b < 16u; b++) {
-        bw_write_bit(&bw, 1);                    /* prev_intra4x4_pred_mode_flag */
-    }
-    bw_write_ue(&bw, 0);                         /* intra_chroma_pred_mode: DC */
+    write_i_nxn_fixed_prefix(&bw);
     bw_write_ue(&bw, k_cbp_intra_code_num[cbp]);
 
     if (cbp != 0u) {
-        bw_write_se(&bw, 0);                     /* mb_qp_delta */
+        bw_write_bit(&bw, 1);                    /* mb_qp_delta: se(0) */
         for (b = 0; b < 16u; b++) {
             if ((cbp_luma & (1u << (b / 4u))) != 0u) {
                 write_luma_residual_dc_only(&bw, levels[b], 0u);
