@@ -119,25 +119,53 @@ Pull requests and `main` pushes run the supported CI validation matrix:
 
 | Workflow | Runner | Coverage |
 | --- | --- | --- |
-| `linux-validation.yml` | `ubuntu-24.04` | Debug CMake/Ninja build, ffmpeg integration, Cortex-M4/M7 QEMU scaler and encoder firmware tests, and Release production-profile build |
+| `linux-validation.yml` | `ubuntu-24.04` | Debug CMake/Ninja build, ffmpeg integration, Cortex-M4/M7 QEMU scaler and encoder firmware tests, Release production-profile build, and FreeRTOS Cortex-M7 developer package validation |
 | `macos-validation.yml` | `macos-15` | AppleClang host Debug build and CTest, with Xcode, Clang, and CMake versions logged |
 
 Android and iOS validation are not supported CI targets for this release
-tranche. Cortex-M4/M7 coverage is provided by the Ubuntu QEMU firmware tests,
-not by publishing embedded binaries.
+tranche. Cortex-M4/M7 validation is provided by the Ubuntu QEMU firmware tests,
+and release assets additionally include Cortex-M7 FreeRTOS static-library
+developer packages.
 
 Source releases are created by `source-release.yml` on tags that match
 `v*.*.*`. The release workflow reruns the Linux/QEMU and macOS validation gates,
 verifies the tag `vX.Y.Z` matches
-`project(simple_h264_enc_i VERSION X.Y.Z)` in `CMakeLists.txt`, then publishes
-only:
+`project(simple_h264_enc_i VERSION X.Y.Z)` in `CMakeLists.txt`, then publishes:
 
 * `simple_h264_enc_i-${VERSION}.tar.gz`
 * `simple_h264_enc_i-${VERSION}.tar.gz.sha256`
+* `simple_h264_enc_i-${VERSION}-freertos-cortex-m7-soft.tar.gz`
+* `simple_h264_enc_i-${VERSION}-freertos-cortex-m7-soft.tar.gz.sha256`
+* `simple_h264_enc_i-${VERSION}-freertos-cortex-m7-fpv5-sp-hard.tar.gz`
+* `simple_h264_enc_i-${VERSION}-freertos-cortex-m7-fpv5-sp-hard.tar.gz.sha256`
 * generated GitHub release notes
 
 The source archive is produced with `git archive` and `gzip -n` so repeated
 builds of the same commit and version are deterministic.
+
+FreeRTOS Cortex-M7 developer packages contain:
+
+* `include/sh264e.h`
+* `lib/libsimple_h264_enc_i.a`
+* `docs/README-FREERTOS-CORTEX-M7.md`
+* `docs/API.md`
+* `docs/MEMORY.md`
+* `build-info.txt`
+* `manifest.txt`
+
+Choose `freertos-cortex-m7-soft` for FreeRTOS projects compiled with
+`-mfloat-abi=soft`. Choose `freertos-cortex-m7-fpv5-sp-hard` for Cortex-M7
+single-precision FPU projects compiled with
+`-mfpu=fpv5-sp-d16 -mfloat-abi=hard`. The consuming application must compile
+its objects with compatible `-mcpu=cortex-m7`, `-mthumb`, FPU, and
+`-mfloat-abi` settings; hard-float and soft-float object files are not ABI
+compatible.
+
+The Cortex-M7 packages are built from the production library sources only
+(`src/sh264e.c` and `src/nanojpeg.c`) with tools, tests, JPEG diagnostic hooks,
+and NanoJPEG full-image decode exports disabled. They are developer integration
+packages, not standalone host Linux/macOS binaries. Android and iOS artifacts
+remain out of scope.
 
 Release checklist:
 
@@ -145,7 +173,8 @@ Release checklist:
 2. Merge the release commit to `main`.
 3. Confirm the Linux and macOS CI workflows are green on `main`.
 4. Create and push the matching tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-5. Verify the GitHub Release contains the source archive and SHA-256 checksum.
+5. Verify the GitHub Release contains the source archive, both Cortex-M7
+   FreeRTOS packages, and all SHA-256 checksums.
 
 ## CLI Example
 

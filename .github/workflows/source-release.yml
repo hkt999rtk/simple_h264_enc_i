@@ -26,6 +26,7 @@ jobs:
             ninja-build \
             ffmpeg \
             libjpeg-turbo-progs \
+            binutils-arm-none-eabi \
             gcc-arm-none-eabi \
             libnewlib-arm-none-eabi \
             qemu-system-arm
@@ -100,16 +101,24 @@ jobs:
         run: ctest --test-dir build-macos --output-on-failure
 
   release:
-    name: Publish source release
+    name: Publish source and FreeRTOS release
     runs-on: ubuntu-24.04
     needs:
       - linux-validation
       - macos-validation
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
+
+      - name: Install release package dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils-arm-none-eabi \
+            gcc-arm-none-eabi \
+            libnewlib-arm-none-eabi
 
       - name: Verify tag matches CMake project version
         shell: bash
@@ -141,16 +150,29 @@ jobs:
         run: |
           set -euo pipefail
 
+          mkdir -p release-assets
           archive="simple_h264_enc_i-${VERSION}.tar.gz"
-          git archive --format=tar --prefix="simple_h264_enc_i-${VERSION}/" HEAD | gzip -n > "${archive}"
-          sha256sum "${archive}" > "${archive}.sha256"
+          git archive --format=tar --prefix="simple_h264_enc_i-${VERSION}/" HEAD | gzip -n > "release-assets/${archive}"
+          (cd release-assets && sha256sum "${archive}" > "${archive}.sha256")
+
+      - name: Build FreeRTOS Cortex-M7 developer packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/build_freertos_cortex_m7_packages.sh \
+            --version "${VERSION}" \
+            --output-dir release-assets
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            "simple_h264_enc_i-${VERSION}.tar.gz" \
-            "simple_h264_enc_i-${VERSION}.tar.gz.sha256" \
+            "release-assets/simple_h264_enc_i-${VERSION}.tar.gz" \
+            "release-assets/simple_h264_enc_i-${VERSION}.tar.gz.sha256" \
+            "release-assets/simple_h264_enc_i-${VERSION}-freertos-cortex-m7-soft.tar.gz" \
+            "release-assets/simple_h264_enc_i-${VERSION}-freertos-cortex-m7-soft.tar.gz.sha256" \
+            "release-assets/simple_h264_enc_i-${VERSION}-freertos-cortex-m7-fpv5-sp-hard.tar.gz" \
+            "release-assets/simple_h264_enc_i-${VERSION}-freertos-cortex-m7-fpv5-sp-hard.tar.gz.sha256" \
             --target "${GITHUB_SHA}" \
             --generate-notes
