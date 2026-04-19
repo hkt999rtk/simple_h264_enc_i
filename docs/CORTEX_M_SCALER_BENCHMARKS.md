@@ -174,16 +174,25 @@ Proxy timing rows belong in a separate table from real-board DWT rows. This
 table is a schema for the runner/reporting issues; values are host/QEMU wall
 times, not Cortex-M cycles.
 
+Initial baseline rows were captured from QEMU benchmark ELFs built with
+`arm-none-eabi-gcc (GCC) 15.2.0` using the CMake QEMU firmware flags
+`-O2 -ffreestanding -fno-builtin -ffunction-sections -fdata-sections
+-nostdlib`, the target-specific `-mcpu`/`-mthumb` settings shown below, and
+`SH264E_DISABLE_ARM_DSP` for portable C rows. The local Homebrew cross compiler
+is configured without a bundled C library header set, so this capture used a
+temporary minimal C declaration header path while still linking the firmware as
+freestanding `-nostdlib` images.
+
 | Date | QEMU version | Host OS / CPU | Target firmware | Machine | CPU model | Variant | Repeats | Median wall time | Min wall time | Max wall time | Checksum status | Notes |
 | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |
-| TBD | TBD | TBD | `sh264e_qemu_scaler_bench_m4` | `mps2-an386` | `cortex-m4` | DSP-capable | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
-| TBD | TBD | TBD | `sh264e_qemu_scaler_bench_m4_portable` | `mps2-an386` | `cortex-m4` | portable C | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
-| TBD | TBD | TBD | `sh264e_qemu_scaler_bench_m7` | `mps2-an500` | `cortex-m7` | DSP-capable | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
-| TBD | TBD | TBD | `sh264e_qemu_scaler_bench_m7_portable` | `mps2-an500` | `cortex-m7` | portable C | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
-| TBD | TBD | TBD | `sh264e_qemu_encoder_bench_m4` | `mps2-an386` | `cortex-m4` | DSP-capable | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
-| TBD | TBD | TBD | `sh264e_qemu_encoder_bench_m4_portable` | `mps2-an386` | `cortex-m4` | portable C | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
-| TBD | TBD | TBD | `sh264e_qemu_encoder_bench_m7` | `mps2-an500` | `cortex-m7` | DSP-capable | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
-| TBD | TBD | TBD | `sh264e_qemu_encoder_bench_m7_portable` | `mps2-an500` | `cortex-m7` | portable C | TBD | TBD | TBD | TBD | pass/fail via exit code | QEMU proxy timing only |
+| 2026-04-19 | QEMU emulator version 10.2.1 | macOS-26.3-arm64-arm-64bit / Apple M1 Pro | `sh264e_qemu_scaler_bench_m4` | `mps2-an386` | `cortex-m4` | DSP-capable | 7 | 0.038981s | 0.037587s | 0.044042s | pass | QEMU proxy timing only; not Cortex-M cycles |
+| 2026-04-19 | QEMU emulator version 10.2.1 | macOS-26.3-arm64-arm-64bit / Apple M1 Pro | `sh264e_qemu_scaler_bench_m4_portable` | `mps2-an386` | `cortex-m4` | portable C | 7 | 0.038051s | 0.035880s | 0.038912s | pass | QEMU proxy timing only; not Cortex-M cycles |
+| 2026-04-19 | QEMU emulator version 10.2.1 | macOS-26.3-arm64-arm-64bit / Apple M1 Pro | `sh264e_qemu_scaler_bench_m7` | `mps2-an500` | `cortex-m7` | DSP-capable | 7 | 0.040218s | 0.038007s | 0.040551s | pass | QEMU proxy timing only; not Cortex-M cycles |
+| 2026-04-19 | QEMU emulator version 10.2.1 | macOS-26.3-arm64-arm-64bit / Apple M1 Pro | `sh264e_qemu_scaler_bench_m7_portable` | `mps2-an500` | `cortex-m7` | portable C | 7 | 0.039237s | 0.037282s | 0.042193s | pass | QEMU proxy timing only; not Cortex-M cycles |
+| 2026-04-19 | QEMU emulator version 10.2.1 | macOS-26.3-arm64-arm-64bit / Apple M1 Pro | `sh264e_qemu_encoder_bench_m4` | `mps2-an386` | `cortex-m4` | DSP-capable | 7 | 0.075284s | 0.060355s | 0.077442s | pass | QEMU proxy timing only; not Cortex-M cycles |
+| 2026-04-19 | QEMU emulator version 10.2.1 | macOS-26.3-arm64-arm-64bit / Apple M1 Pro | `sh264e_qemu_encoder_bench_m4_portable` | `mps2-an386` | `cortex-m4` | portable C | 7 | 0.069209s | 0.056350s | 0.069765s | pass | QEMU proxy timing only; not Cortex-M cycles |
+| 2026-04-19 | QEMU emulator version 10.2.1 | macOS-26.3-arm64-arm-64bit / Apple M1 Pro | `sh264e_qemu_encoder_bench_m7` | `mps2-an500` | `cortex-m7` | DSP-capable | 7 | 0.053135s | 0.049608s | 0.056042s | pass | QEMU proxy timing only; not Cortex-M cycles |
+| 2026-04-19 | QEMU emulator version 10.2.1 | macOS-26.3-arm64-arm-64bit / Apple M1 Pro | `sh264e_qemu_encoder_bench_m7_portable` | `mps2-an500` | `cortex-m7` | portable C | 7 | 0.052251s | 0.050608s | 0.052608s | pass | QEMU proxy timing only; not Cortex-M cycles |
 
 ## Tuning Decision
 
