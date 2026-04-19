@@ -23,8 +23,10 @@ follow-up work.
 * Output remains bit-exact by default. If an optimization cannot preserve
   checksum parity, open a separate documentation/design issue before changing
   the checksum policy.
-* QEMU is a build, boot, semihosting, and checksum preflight only. Real
-  Cortex-M hardware with DWT cycle capture is required for performance claims.
+* QEMU is a build, boot, semihosting, and checksum preflight only. Optional
+  QEMU proxy timing is a host/QEMU wall-time trend metric, not Cortex-M4/M7
+  cycle data. Real Cortex-M hardware with DWT cycle capture is required for
+  performance claims.
 
 ## Roadmap
 
@@ -79,6 +81,10 @@ ctest --test-dir build-qemu -R 'qemu|sh264e_qemu' --output-on-failure
 Performance claims must include real-board DWT cycle data with board, core,
 clock, compiler, flags, cache state, memory placement, checksum, total cycles,
 and cycles per encoded or resized slice.
+QEMU proxy timing, when collected, must use the schema in
+`docs/CORTEX_M_SCALER_BENCHMARKS.md`, must be labeled as host/QEMU wall time,
+and must not become a merge-blocking absolute threshold unless a later issue
+explicitly defines that policy.
 
 ## Current Benchmark Firmware
 
