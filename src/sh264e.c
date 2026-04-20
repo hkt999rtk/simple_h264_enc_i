@@ -739,26 +739,6 @@ static uint8_t bilinear_sample_plane_mapped(const uint8_t *src,
     return bilinear_blend_u8(row0[x0], row0[x1], row1[x0], row1[x1], sx.fraction, sy.fraction);
 }
 
-static uint8_t bilinear_sample_plane_quarter(const uint8_t *src,
-                                             uint32_t src_width,
-                                             uint32_t src_height,
-                                             ptrdiff_t src_stride,
-                                             sh264e_scale_coord_t sx,
-                                             sh264e_scale_coord_t sy)
-{
-    const uint32_t x0 = sx.index;
-    const uint32_t y0 = sy.index;
-    const uint32_t x1 = x0 + 1u < src_width ? x0 + 1u : x0;
-    const uint32_t y1 = y0 + 1u < src_height ? y0 + 1u : y0;
-    const uint8_t *row0 = src + (size_t)y0 * (size_t)src_stride;
-    const uint8_t *row1 = src + (size_t)y1 * (size_t)src_stride;
-    const unsigned wx_quarters = sx.fraction >> (SH264E_SCALE_FP_BITS - 2u);
-    const unsigned wy_quarters = sy.fraction >> (SH264E_SCALE_FP_BITS - 2u);
-
-    return bilinear_blend_quarter_u8(row0[x0], row0[x1], row1[x0], row1[x1],
-                                     wx_quarters, wy_quarters);
-}
-
 static uint8_t bilinear_sample_nv12_chroma_mapped(const uint8_t *src,
                                                   uint32_t src_width,
                                                   uint32_t src_height,
@@ -781,32 +761,6 @@ static uint8_t bilinear_sample_nv12_chroma_mapped(const uint8_t *src,
                              row1[(size_t)x1 * 2u + c],
                              sx.fraction,
                              sy.fraction);
-}
-
-static uint8_t bilinear_sample_nv12_chroma_quarter(const uint8_t *src,
-                                                   uint32_t src_width,
-                                                   uint32_t src_height,
-                                                   ptrdiff_t src_stride,
-                                                   unsigned component,
-                                                   sh264e_scale_coord_t sx,
-                                                   sh264e_scale_coord_t sy)
-{
-    const uint32_t x0 = sx.index;
-    const uint32_t y0 = sy.index;
-    const uint32_t x1 = x0 + 1u < src_width ? x0 + 1u : x0;
-    const uint32_t y1 = y0 + 1u < src_height ? y0 + 1u : y0;
-    const uint8_t *row0 = src + (size_t)y0 * (size_t)src_stride;
-    const uint8_t *row1 = src + (size_t)y1 * (size_t)src_stride;
-    const size_t c = component;
-    const unsigned wx_quarters = sx.fraction >> (SH264E_SCALE_FP_BITS - 2u);
-    const unsigned wy_quarters = sy.fraction >> (SH264E_SCALE_FP_BITS - 2u);
-
-    return bilinear_blend_quarter_u8(row0[(size_t)x0 * 2u + c],
-                                     row0[(size_t)x1 * 2u + c],
-                                     row1[(size_t)x0 * 2u + c],
-                                     row1[(size_t)x1 * 2u + c],
-                                     wx_quarters,
-                                     wy_quarters);
 }
 
 static int exact_scale_ratio_mode(uint32_t src_width,
@@ -854,6 +808,198 @@ static sh264e_scale_coord_t exact_scale_coord(int mode,
     return coord;
 }
 
+static void exact_scale_axis_sample(int mode,
+                                    uint32_t dst_pos,
+                                    uint32_t dst_size,
+                                    uint32_t src_size,
+                                    uint32_t *index0,
+                                    uint32_t *index1,
+                                    unsigned *fraction_quarters)
+{
+    const sh264e_scale_coord_t coord = exact_scale_coord(mode, dst_pos, dst_size, src_size);
+
+    *index0 = coord.index;
+    *index1 = coord.index + 1u < src_size ? coord.index + 1u : coord.index;
+    *fraction_quarters = coord.fraction >> (SH264E_SCALE_FP_BITS - 2u);
+}
+
+static void scale_exact_plane_row_quarter(const uint8_t *row0,
+                                          const uint8_t *row1,
+                                          uint32_t src_width,
+                                          uint8_t *dst_row,
+                                          uint32_t dst_width,
+                                          int mode,
+                                          unsigned wy_quarters)
+{
+    uint32_t x;
+
+    if (mode == 1) {
+        const uint32_t last_dst = dst_width - 1u;
+        const uint32_t last_src = src_width - 1u;
+
+        dst_row[0] = bilinear_blend_quarter_u8(row0[0], row0[0],
+                                               row1[0], row1[0],
+                                               0u, wy_quarters);
+        for (x = 1u; x < last_dst; x++) {
+            const uint32_t raw_quarters = x * 2u - 1u;
+            const uint32_t x0 = raw_quarters >> 2u;
+            const unsigned wx_quarters = (unsigned)(raw_quarters & 3u);
+
+            dst_row[x] = bilinear_blend_quarter_u8(row0[x0], row0[x0 + 1u],
+                                                   row1[x0], row1[x0 + 1u],
+                                                   wx_quarters, wy_quarters);
+        }
+        dst_row[last_dst] = bilinear_blend_quarter_u8(row0[last_src], row0[last_src],
+                                                      row1[last_src], row1[last_src],
+                                                      0u, wy_quarters);
+        return;
+    }
+
+    for (x = 0; x < dst_width; x++) {
+        const uint32_t x0 = x * 2u;
+
+        dst_row[x] = bilinear_blend_quarter_u8(row0[x0], row0[x0 + 1u],
+                                               row1[x0], row1[x0 + 1u],
+                                               2u, wy_quarters);
+    }
+}
+
+static void scale_exact_nv12_chroma_row_quarter(const uint8_t *row0,
+                                                const uint8_t *row1,
+                                                uint32_t src_width,
+                                                uint8_t *dst_row,
+                                                uint32_t dst_width,
+                                                int mode,
+                                                unsigned wy_quarters)
+{
+    uint32_t x;
+    unsigned c;
+
+    if (mode == 1) {
+        const uint32_t last_dst = dst_width - 1u;
+        const uint32_t last_src = src_width - 1u;
+
+        for (c = 0; c < 2u; c++) {
+            dst_row[c] = bilinear_blend_quarter_u8(row0[c], row0[c],
+                                                   row1[c], row1[c],
+                                                   0u, wy_quarters);
+        }
+        for (x = 1u; x < last_dst; x++) {
+            const uint32_t raw_quarters = x * 2u - 1u;
+            const uint32_t x0 = raw_quarters >> 2u;
+            const unsigned wx_quarters = (unsigned)(raw_quarters & 3u);
+            const size_t dst_x = (size_t)x * 2u;
+            const size_t src_x0 = (size_t)x0 * 2u;
+            const size_t src_x1 = (size_t)(x0 + 1u) * 2u;
+
+            dst_row[dst_x] = bilinear_blend_quarter_u8(row0[src_x0],
+                                                       row0[src_x1],
+                                                       row1[src_x0],
+                                                       row1[src_x1],
+                                                       wx_quarters,
+                                                       wy_quarters);
+            dst_row[dst_x + 1u] = bilinear_blend_quarter_u8(row0[src_x0 + 1u],
+                                                            row0[src_x1 + 1u],
+                                                            row1[src_x0 + 1u],
+                                                            row1[src_x1 + 1u],
+                                                            wx_quarters,
+                                                            wy_quarters);
+        }
+        for (c = 0; c < 2u; c++) {
+            const size_t dst_x = (size_t)last_dst * 2u + c;
+            const size_t src_x = (size_t)last_src * 2u + c;
+
+            dst_row[dst_x] = bilinear_blend_quarter_u8(row0[src_x], row0[src_x],
+                                                       row1[src_x], row1[src_x],
+                                                       0u, wy_quarters);
+        }
+        return;
+    }
+
+    for (x = 0; x < dst_width; x++) {
+        const uint32_t x0 = x * 2u;
+        const size_t dst_x = (size_t)x * 2u;
+        const size_t src_x0 = (size_t)x0 * 2u;
+        const size_t src_x1 = (size_t)(x0 + 1u) * 2u;
+
+        dst_row[dst_x] = bilinear_blend_quarter_u8(row0[src_x0],
+                                                   row0[src_x1],
+                                                   row1[src_x0],
+                                                   row1[src_x1],
+                                                   2u,
+                                                   wy_quarters);
+        dst_row[dst_x + 1u] = bilinear_blend_quarter_u8(row0[src_x0 + 1u],
+                                                        row0[src_x1 + 1u],
+                                                        row1[src_x0 + 1u],
+                                                        row1[src_x1 + 1u],
+                                                        2u,
+                                                        wy_quarters);
+    }
+}
+
+static void scale_exact_component_pair_to_nv12_row_quarter(const uint8_t *cb_row0,
+                                                           const uint8_t *cb_row1,
+                                                           const uint8_t *cr_row0,
+                                                           const uint8_t *cr_row1,
+                                                           uint32_t src_width,
+                                                           uint8_t *dst_row,
+                                                           uint32_t dst_width,
+                                                           int mode,
+                                                           unsigned wy_quarters)
+{
+    uint32_t x;
+
+    if (mode == 1) {
+        const uint32_t last_dst = dst_width - 1u;
+        const uint32_t last_src = src_width - 1u;
+
+        dst_row[0] = bilinear_blend_quarter_u8(cb_row0[0], cb_row0[0],
+                                               cb_row1[0], cb_row1[0],
+                                               0u, wy_quarters);
+        dst_row[1] = bilinear_blend_quarter_u8(cr_row0[0], cr_row0[0],
+                                               cr_row1[0], cr_row1[0],
+                                               0u, wy_quarters);
+        for (x = 1u; x < last_dst; x++) {
+            const uint32_t raw_quarters = x * 2u - 1u;
+            const uint32_t x0 = raw_quarters >> 2u;
+            const unsigned wx_quarters = (unsigned)(raw_quarters & 3u);
+            const size_t dst_x = (size_t)x * 2u;
+
+            dst_row[dst_x] = bilinear_blend_quarter_u8(cb_row0[x0], cb_row0[x0 + 1u],
+                                                       cb_row1[x0], cb_row1[x0 + 1u],
+                                                       wx_quarters, wy_quarters);
+            dst_row[dst_x + 1u] = bilinear_blend_quarter_u8(cr_row0[x0], cr_row0[x0 + 1u],
+                                                            cr_row1[x0], cr_row1[x0 + 1u],
+                                                            wx_quarters, wy_quarters);
+        }
+        dst_row[(size_t)last_dst * 2u] = bilinear_blend_quarter_u8(cb_row0[last_src],
+                                                                   cb_row0[last_src],
+                                                                   cb_row1[last_src],
+                                                                   cb_row1[last_src],
+                                                                   0u,
+                                                                   wy_quarters);
+        dst_row[(size_t)last_dst * 2u + 1u] = bilinear_blend_quarter_u8(cr_row0[last_src],
+                                                                        cr_row0[last_src],
+                                                                        cr_row1[last_src],
+                                                                        cr_row1[last_src],
+                                                                        0u,
+                                                                        wy_quarters);
+        return;
+    }
+
+    for (x = 0; x < dst_width; x++) {
+        const uint32_t x0 = x * 2u;
+        const size_t dst_x = (size_t)x * 2u;
+
+        dst_row[dst_x] = bilinear_blend_quarter_u8(cb_row0[x0], cb_row0[x0 + 1u],
+                                                   cb_row1[x0], cb_row1[x0 + 1u],
+                                                   2u, wy_quarters);
+        dst_row[dst_x + 1u] = bilinear_blend_quarter_u8(cr_row0[x0], cr_row0[x0 + 1u],
+                                                        cr_row1[x0], cr_row1[x0 + 1u],
+                                                        2u, wy_quarters);
+    }
+}
+
 static void streaming_note_exact_scale_mode(int mode)
 {
 #if SH264E_ENABLE_JPEG_TEST_HOOKS
@@ -887,6 +1033,19 @@ static void jpeg_fill_nv12_neutral_chroma(uint8_t *dst_uv)
     }
 }
 
+static const uint8_t *streaming_component_row_ptr(const sh264e_jpeg_stream_component_t *src,
+                                                  uint32_t y)
+{
+    if (y < src->row0) {
+        y = src->row0;
+    }
+    y -= src->row0;
+    if (y >= src->rows) {
+        y = src->rows - 1u;
+    }
+    return src->pixels + (size_t)y * (size_t)src->stride;
+}
+
 static uint8_t streaming_bilinear_sample_plane(const sh264e_jpeg_stream_component_t *src,
                                                sh264e_scale_coord_t sx,
                                                sh264e_scale_coord_t sy)
@@ -918,38 +1077,38 @@ static uint8_t streaming_bilinear_sample_plane(const sh264e_jpeg_stream_componen
     return bilinear_blend_u8(row0[x0], row0[x1], row1[x0], row1[x1], sx.fraction, sy.fraction);
 }
 
-static uint8_t streaming_bilinear_sample_plane_quarter(const sh264e_jpeg_stream_component_t *src,
-                                                       sh264e_scale_coord_t sx,
-                                                       sh264e_scale_coord_t sy)
+static void streaming_scale_component_exact_slice(const sh264e_jpeg_stream_component_t *src,
+                                                  uint8_t *dst,
+                                                  uint32_t dst_width,
+                                                  uint32_t dst_height,
+                                                  uint32_t dst_y_start,
+                                                  uint32_t dst_rows,
+                                                  ptrdiff_t dst_stride,
+                                                  int exact_mode)
 {
-    uint32_t y0 = sy.index;
-    uint32_t y1 = y0 + 1u < src->height ? y0 + 1u : y0;
-    const uint32_t x0 = sx.index;
-    const uint32_t x1 = x0 + 1u < src->width ? x0 + 1u : x0;
-    const uint8_t *row0;
-    const uint8_t *row1;
-    const unsigned wx_quarters = sx.fraction >> (SH264E_SCALE_FP_BITS - 2u);
-    const unsigned wy_quarters = sy.fraction >> (SH264E_SCALE_FP_BITS - 2u);
+    uint32_t y;
 
-    if (y0 < src->row0) {
-        y0 = src->row0;
-    }
-    if (y1 < src->row0) {
-        y1 = src->row0;
-    }
-    y0 -= src->row0;
-    y1 -= src->row0;
-    if (y0 >= src->rows) {
-        y0 = src->rows - 1u;
-    }
-    if (y1 >= src->rows) {
-        y1 = src->rows - 1u;
-    }
+    for (y = 0; y < dst_rows; y++) {
+        uint32_t y0;
+        uint32_t y1;
+        unsigned wy_quarters;
+        uint8_t *dst_row = dst + (size_t)y * (size_t)dst_stride;
 
-    row0 = src->pixels + (size_t)y0 * (size_t)src->stride;
-    row1 = src->pixels + (size_t)y1 * (size_t)src->stride;
-    return bilinear_blend_quarter_u8(row0[x0], row0[x1], row1[x0], row1[x1],
-                                     wx_quarters, wy_quarters);
+        exact_scale_axis_sample(exact_mode,
+                                dst_y_start + y,
+                                dst_height,
+                                src->height,
+                                &y0,
+                                &y1,
+                                &wy_quarters);
+        scale_exact_plane_row_quarter(streaming_component_row_ptr(src, y0),
+                                      streaming_component_row_ptr(src, y1),
+                                      src->width,
+                                      dst_row,
+                                      dst_width,
+                                      exact_mode,
+                                      wy_quarters);
+    }
 }
 
 static void streaming_scale_component_slice(const sh264e_jpeg_stream_component_t *src,
@@ -965,29 +1124,64 @@ static void streaming_scale_component_slice(const sh264e_jpeg_stream_component_t
     uint32_t y;
 
     streaming_note_exact_scale_mode(exact_mode);
+    if (exact_mode != 0) {
+        streaming_scale_component_exact_slice(src,
+                                              dst,
+                                              dst_width,
+                                              dst_height,
+                                              dst_y_start,
+                                              dst_rows,
+                                              dst_stride,
+                                              exact_mode);
+        return;
+    }
+
     for (y = 0; y < dst_rows; y++) {
         uint8_t *dst_row = dst + (size_t)y * (size_t)dst_stride;
-        const uint32_t dst_y = dst_y_start + y;
-        const sh264e_scale_coord_t sy = exact_mode != 0 ?
-                                        exact_scale_coord(exact_mode, dst_y, dst_height, src->height) :
-                                        scale_coord_from_raw(y_mapper.pos, src->height);
+        const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, src->height);
         sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(src->width, dst_width, 0u);
         uint32_t x;
 
         for (x = 0; x < dst_width; x++) {
-            const sh264e_scale_coord_t sx = exact_mode != 0 ?
-                                            exact_scale_coord(exact_mode, x, dst_width, src->width) :
-                                            scale_coord_from_raw(x_mapper.pos, src->width);
-            dst_row[x] = exact_mode != 0
-                             ? streaming_bilinear_sample_plane_quarter(src, sx, sy)
-                             : streaming_bilinear_sample_plane(src, sx, sy);
-            if (exact_mode == 0) {
-                scale_axis_mapper_advance(&x_mapper);
-            }
+            const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, src->width);
+
+            dst_row[x] = streaming_bilinear_sample_plane(src, sx, sy);
+            scale_axis_mapper_advance(&x_mapper);
         }
-        if (exact_mode == 0) {
-            scale_axis_mapper_advance(&y_mapper);
-        }
+        scale_axis_mapper_advance(&y_mapper);
+    }
+}
+
+static void streaming_scale_nv12_component_chroma_exact_slice(const sh264e_jpeg_stream_component_t *cb,
+                                                             const sh264e_jpeg_stream_component_t *cr,
+                                                             uint8_t *dst_uv,
+                                                             uint32_t dst_y_start,
+                                                             int exact_mode)
+{
+    uint32_t y;
+
+    for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
+        uint32_t y0;
+        uint32_t y1;
+        unsigned wy_quarters;
+        uint8_t *dst_row = dst_uv + (size_t)y * SH264E_V1_WIDTH;
+
+        exact_scale_axis_sample(exact_mode,
+                                dst_y_start + y,
+                                SH264E_V1_HEIGHT / 2u,
+                                cb->height,
+                                &y0,
+                                &y1,
+                                &wy_quarters);
+        scale_exact_component_pair_to_nv12_row_quarter(streaming_component_row_ptr(cb, y0),
+                                                       streaming_component_row_ptr(cb, y1),
+                                                       streaming_component_row_ptr(cr, y0),
+                                                       streaming_component_row_ptr(cr, y1),
+                                                       cb->width,
+                                                       dst_row,
+                                                       SH264E_CHROMA_WIDTH,
+                                                       exact_mode,
+                                                       wy_quarters);
     }
 }
 
@@ -1006,38 +1200,25 @@ static void streaming_scale_nv12_component_chroma_slice(const sh264e_jpeg_stream
     uint32_t y;
 
     streaming_note_exact_scale_mode(exact_mode);
+    if (exact_mode != 0) {
+        streaming_scale_nv12_component_chroma_exact_slice(cb, cr, dst_uv, dst_y_start, exact_mode);
+        return;
+    }
+
     for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
         uint8_t *row = dst_uv + (size_t)y * SH264E_V1_WIDTH;
-        const uint32_t dst_y = dst_y_start + y;
-        const sh264e_scale_coord_t sy = exact_mode != 0 ?
-                                        exact_scale_coord(exact_mode,
-                                                          dst_y,
-                                                          SH264E_V1_HEIGHT / 2u,
-                                                          cb->height) :
-                                        scale_coord_from_raw(y_mapper.pos, cb->height);
+        const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, cb->height);
         sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(cb->width, SH264E_CHROMA_WIDTH, 0u);
         uint32_t x;
 
         for (x = 0; x < SH264E_CHROMA_WIDTH; x++) {
-            const sh264e_scale_coord_t sx = exact_mode != 0 ?
-                                            exact_scale_coord(exact_mode,
-                                                              x,
-                                                              SH264E_CHROMA_WIDTH,
-                                                              cb->width) :
-                                            scale_coord_from_raw(x_mapper.pos, cb->width);
-            row[(size_t)x * 2u] = exact_mode != 0
-                                      ? streaming_bilinear_sample_plane_quarter(cb, sx, sy)
-                                      : streaming_bilinear_sample_plane(cb, sx, sy);
-            row[(size_t)x * 2u + 1u] = exact_mode != 0
-                                           ? streaming_bilinear_sample_plane_quarter(cr, sx, sy)
-                                           : streaming_bilinear_sample_plane(cr, sx, sy);
-            if (exact_mode == 0) {
-                scale_axis_mapper_advance(&x_mapper);
-            }
+            const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, cb->width);
+
+            row[(size_t)x * 2u] = streaming_bilinear_sample_plane(cb, sx, sy);
+            row[(size_t)x * 2u + 1u] = streaming_bilinear_sample_plane(cr, sx, sy);
+            scale_axis_mapper_advance(&x_mapper);
         }
-        if (exact_mode == 0) {
-            scale_axis_mapper_advance(&y_mapper);
-        }
+        scale_axis_mapper_advance(&y_mapper);
     }
 }
 
@@ -1562,29 +1743,44 @@ static void resize_scale_plane_slice(const uint8_t *src,
     sh264e_axis_mapper_t y_mapper = scale_axis_mapper_init(src_height, dst_height, dst_y_start);
     uint32_t y;
 
+    if (exact_mode != 0) {
+        for (y = 0; y < dst_rows; y++) {
+            uint32_t y0;
+            uint32_t y1;
+            unsigned wy_quarters;
+            uint8_t *dst_row = dst + (size_t)y * (size_t)dst_stride;
+
+            exact_scale_axis_sample(exact_mode,
+                                    dst_y_start + y,
+                                    dst_height,
+                                    src_height,
+                                    &y0,
+                                    &y1,
+                                    &wy_quarters);
+            scale_exact_plane_row_quarter(src + (size_t)y0 * (size_t)src_stride,
+                                          src + (size_t)y1 * (size_t)src_stride,
+                                          src_width,
+                                          dst_row,
+                                          dst_width,
+                                          exact_mode,
+                                          wy_quarters);
+        }
+        return;
+    }
+
     for (y = 0; y < dst_rows; y++) {
         uint8_t *dst_row = dst + (size_t)y * (size_t)dst_stride;
-        const uint32_t dst_y = dst_y_start + y;
-        const sh264e_scale_coord_t sy = exact_mode != 0 ?
-                                        exact_scale_coord(exact_mode, dst_y, dst_height, src_height) :
-                                        scale_coord_from_raw(y_mapper.pos, src_height);
+        const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, src_height);
         sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(src_width, dst_width, 0u);
         uint32_t x;
 
         for (x = 0; x < dst_width; x++) {
-            const sh264e_scale_coord_t sx = exact_mode != 0 ?
-                                            exact_scale_coord(exact_mode, x, dst_width, src_width) :
-                                            scale_coord_from_raw(x_mapper.pos, src_width);
-            dst_row[x] = exact_mode != 0
-                             ? bilinear_sample_plane_quarter(src, src_width, src_height, src_stride, sx, sy)
-                             : bilinear_sample_plane_mapped(src, src_width, src_height, src_stride, sx, sy);
-            if (exact_mode == 0) {
-                scale_axis_mapper_advance(&x_mapper);
-            }
+            const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, src_width);
+
+            dst_row[x] = bilinear_sample_plane_mapped(src, src_width, src_height, src_stride, sx, sy);
+            scale_axis_mapper_advance(&x_mapper);
         }
-        if (exact_mode == 0) {
-            scale_axis_mapper_advance(&y_mapper);
-        }
+        scale_axis_mapper_advance(&y_mapper);
     }
 }
 
@@ -1604,62 +1800,57 @@ static void resize_scale_nv12_chroma_slice(const uint8_t *src_uv,
                                                            dst_y_start);
     uint32_t y;
 
+    if (exact_mode != 0) {
+        for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
+            uint32_t y0;
+            uint32_t y1;
+            unsigned wy_quarters;
+            uint8_t *dst_row = dst_uv + (size_t)y * SH264E_V1_WIDTH;
+
+            exact_scale_axis_sample(exact_mode,
+                                    dst_y_start + y,
+                                    SH264E_V1_HEIGHT / 2u,
+                                    src_chroma_height,
+                                    &y0,
+                                    &y1,
+                                    &wy_quarters);
+            scale_exact_nv12_chroma_row_quarter(src_uv + (size_t)y0 * (size_t)src_stride,
+                                                src_uv + (size_t)y1 * (size_t)src_stride,
+                                                src_chroma_width,
+                                                dst_row,
+                                                SH264E_CHROMA_WIDTH,
+                                                exact_mode,
+                                                wy_quarters);
+        }
+        return;
+    }
+
     for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
         uint8_t *dst_row = dst_uv + (size_t)y * SH264E_V1_WIDTH;
-        const uint32_t dst_y = dst_y_start + y;
-        const sh264e_scale_coord_t sy = exact_mode != 0 ?
-                                        exact_scale_coord(exact_mode,
-                                                          dst_y,
-                                                          SH264E_V1_HEIGHT / 2u,
-                                                          src_chroma_height) :
-                                        scale_coord_from_raw(y_mapper.pos, src_chroma_height);
+        const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, src_chroma_height);
         sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(src_chroma_width, SH264E_CHROMA_WIDTH, 0u);
         uint32_t x;
 
         for (x = 0; x < SH264E_CHROMA_WIDTH; x++) {
-            const sh264e_scale_coord_t sx = exact_mode != 0 ?
-                                            exact_scale_coord(exact_mode,
-                                                              x,
-                                                              SH264E_CHROMA_WIDTH,
-                                                              src_chroma_width) :
-                                            scale_coord_from_raw(x_mapper.pos, src_chroma_width);
-            dst_row[(size_t)x * 2u] = exact_mode != 0
-                                          ? bilinear_sample_nv12_chroma_quarter(src_uv,
-                                                                               src_chroma_width,
-                                                                               src_chroma_height,
-                                                                               src_stride,
-                                                                               0u,
-                                                                               sx,
-                                                                               sy)
-                                          : bilinear_sample_nv12_chroma_mapped(src_uv,
+            const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, src_chroma_width);
+
+            dst_row[(size_t)x * 2u] = bilinear_sample_nv12_chroma_mapped(src_uv,
+                                                                         src_chroma_width,
+                                                                         src_chroma_height,
+                                                                         src_stride,
+                                                                         0u,
+                                                                         sx,
+                                                                         sy);
+            dst_row[(size_t)x * 2u + 1u] = bilinear_sample_nv12_chroma_mapped(src_uv,
                                                                               src_chroma_width,
                                                                               src_chroma_height,
                                                                               src_stride,
-                                                                              0u,
+                                                                              1u,
                                                                               sx,
                                                                               sy);
-            dst_row[(size_t)x * 2u + 1u] = exact_mode != 0
-                                               ? bilinear_sample_nv12_chroma_quarter(src_uv,
-                                                                                    src_chroma_width,
-                                                                                    src_chroma_height,
-                                                                                    src_stride,
-                                                                                    1u,
-                                                                                    sx,
-                                                                                    sy)
-                                               : bilinear_sample_nv12_chroma_mapped(src_uv,
-                                                                                   src_chroma_width,
-                                                                                   src_chroma_height,
-                                                                                   src_stride,
-                                                                                   1u,
-                                                                                   sx,
-                                                                                   sy);
-            if (exact_mode == 0) {
-                scale_axis_mapper_advance(&x_mapper);
-            }
+            scale_axis_mapper_advance(&x_mapper);
         }
-        if (exact_mode == 0) {
-            scale_axis_mapper_advance(&y_mapper);
-        }
+        scale_axis_mapper_advance(&y_mapper);
     }
 }
 

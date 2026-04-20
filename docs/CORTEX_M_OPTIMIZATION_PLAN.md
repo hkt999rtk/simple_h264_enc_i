@@ -160,6 +160,11 @@ The raw resize API includes exact fixed-ratio fast paths for
 `1280x720 -> 2560x1440` and `5120x2880 -> 2560x1440`. These paths bypass the
 general axis mapper but keep the same half-pixel bilinear samples and rounding,
 so I420 and NV12 slices remain byte-exact with the reference scaler.
+The exact 2x and 0.5x paths now dispatch through dedicated row kernels for raw
+planar, raw NV12 chroma, and JPEG streaming resize output. The row kernels keep
+edge samples clamped to the same half-pixel bilinear coordinates while removing
+per-pixel coordinate structs, clamp branches, and mapper advances from the main
+exact-ratio loops.
 The JPEG MCU-row streaming path now uses the same exact-ratio quarter-step
 sampler for matching 2x and 0.5x source JPEGs while preserving the 1:1
 zero-slice-work path and rolling row-cache behavior.
