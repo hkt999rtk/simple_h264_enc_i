@@ -52,7 +52,9 @@ PRODUCTION_MEMORY_2880P_420 = {
     "peak": 491_520,
     "cache": STREAMING_CACHE_BYTES_2880P_420,
 }
-H264_OUTPUT_CONSUMER_CHUNKS_MIN = 2 + (WIDTH // 16) * (HEIGHT // 16)
+H264_OUTPUT_CONSUMER_CHUNKS_LEGACY_PER_MB = 2 + (WIDTH // 16) * (HEIGHT // 16)
+H264_OUTPUT_CONSUMER_CHUNKS_MIN = 2 + (HEIGHT // 16)
+H264_OUTPUT_CONSUMER_CHUNKS_ROW_BATCHED = 362
 H264_OUTPUT_CHUNK_BYTES = 4_096
 H264_TINY_OUTPUT_CHUNK_BYTES = 7
 H264_ONE_SHOT_OUTPUT_BYTES = 5_588_224
@@ -520,6 +522,16 @@ def encode_jpeg(args, fmt, jpeg_input, bitstream, extra_args=None,
             raise RuntimeError(
                 f"JPEG output consumer chunk count changed: got {chunks}, expected at least {H264_OUTPUT_CONSUMER_CHUNKS_MIN}"
             )
+        if chunks != H264_OUTPUT_CONSUMER_CHUNKS_ROW_BATCHED:
+            raise RuntimeError(
+                "JPEG default output consumer row batching changed: "
+                f"got {chunks}, expected {H264_OUTPUT_CONSUMER_CHUNKS_ROW_BATCHED}"
+            )
+        if chunks >= H264_OUTPUT_CONSUMER_CHUNKS_LEGACY_PER_MB:
+            raise RuntimeError(
+                "JPEG default output consumer regressed to per-macroblock callbacks: "
+                f"got {chunks}, legacy {H264_OUTPUT_CONSUMER_CHUNKS_LEGACY_PER_MB}"
+            )
         chunk_bytes = parse_jpeg_metric(result.stdout, "jpeg output chunk buffer bytes:")
         if chunk_bytes != H264_OUTPUT_CHUNK_BYTES:
             raise RuntimeError(
@@ -633,6 +645,17 @@ def encode_jpeg_output_consumer(args, fmt, jpeg_input, bitstream, extra_args=Non
         raise RuntimeError(
             f"JPEG output consumer regressed to one-shot output buffering: got {chunk_bytes}"
         )
+    if expected_chunk_bytes == H264_OUTPUT_CHUNK_BYTES:
+        if chunks != H264_OUTPUT_CONSUMER_CHUNKS_ROW_BATCHED:
+            raise RuntimeError(
+                "JPEG output consumer row batching changed: "
+                f"got {chunks}, expected {H264_OUTPUT_CONSUMER_CHUNKS_ROW_BATCHED}"
+            )
+        if chunks >= H264_OUTPUT_CONSUMER_CHUNKS_LEGACY_PER_MB:
+            raise RuntimeError(
+                "JPEG output consumer regressed to per-macroblock callbacks: "
+                f"got {chunks}, legacy {H264_OUTPUT_CONSUMER_CHUNKS_LEGACY_PER_MB}"
+            )
     if "jpeg current allocation bytes: 0" not in result.stdout:
         raise RuntimeError(f"JPEG output consumer leaked tracked allocations: {result.stdout!r}")
 

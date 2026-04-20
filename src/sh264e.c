@@ -2606,28 +2606,16 @@ static sh264e_status_t stream_idr_slice_nalu_direct(sh264e_encoder_t *encoder,
                                                     const sh264e_slice_t *slice,
                                                     unsigned row_index,
                                                     unsigned mb_x,
-                                                    uint8_t *chunk_buffer,
-                                                    size_t chunk_capacity,
-                                                    size_t *out_size,
-                                                    sh264e_output_consumer_t consumer,
-                                                    void *consumer_user)
+                                                    sh264e_chunk_writer_t *writer)
 {
-    sh264e_chunk_writer_t writer;
     sh264e_bit_writer_t bw;
     sh264e_status_t status;
 
-    if (chunk_buffer == NULL || out_size == NULL || consumer == NULL ||
-        chunk_capacity == 0u) {
+    if (writer == NULL) {
         return SH264E_ERR_INVALID_ARGUMENT;
     }
 
-    memset(&writer, 0, sizeof(writer));
-    writer.buffer = chunk_buffer;
-    writer.capacity = chunk_capacity;
-    writer.consumer = consumer;
-    writer.user = consumer_user;
-
-    status = bw_begin_annexb_nalu(&bw, &writer, 0x65u);
+    status = bw_begin_annexb_nalu(&bw, writer, 0x65u);
     if (status != SH264E_OK) {
         return status;
     }
@@ -2635,11 +2623,6 @@ static sh264e_status_t stream_idr_slice_nalu_direct(sh264e_encoder_t *encoder,
     if (status != SH264E_OK) {
         return status;
     }
-    status = chunk_writer_flush(&writer);
-    if (status != SH264E_OK) {
-        return status;
-    }
-    *out_size = writer.total;
     return SH264E_OK;
 }
 
@@ -3607,8 +3590,8 @@ static sh264e_status_t sh264e_encode_idr_slice_to_consumer_internal(
     void *consumer_user,
     int require_config_pixfmt)
 {
+    sh264e_chunk_writer_t writer;
     sh264e_status_t status;
-    size_t total = 0u;
 
     if (encoder == NULL || slice == NULL || chunk_buffer == NULL ||
         out_size == NULL || consumer == NULL) {
@@ -3631,22 +3614,30 @@ static sh264e_status_t sh264e_encode_idr_slice_to_consumer_internal(
         return SH264E_ERR_BUFFER_TOO_SMALL;
     }
 
+    memset(&writer, 0, sizeof(writer));
+    writer.buffer = chunk_buffer;
+    writer.capacity = chunk_capacity;
+    writer.consumer = consumer;
+    writer.user = consumer_user;
+
     {
         unsigned mb_x;
         for (mb_x = 0; mb_x < SH264E_MBS_X; mb_x++) {
-            size_t nalu_size = 0u;
             status = stream_idr_slice_nalu_direct(encoder, slice, encoder->slices_encoded,
-                                                  mb_x, chunk_buffer, chunk_capacity,
-                                                  &nalu_size, consumer, consumer_user);
+                                                  mb_x, &writer);
             if (status != SH264E_OK) {
                 return status;
             }
-            total += nalu_size;
         }
     }
 
+    status = chunk_writer_flush(&writer);
+    if (status != SH264E_OK) {
+        return status;
+    }
+
     encoder->slices_encoded++;
-    *out_size = total;
+    *out_size = writer.total;
     return SH264E_OK;
 }
 
