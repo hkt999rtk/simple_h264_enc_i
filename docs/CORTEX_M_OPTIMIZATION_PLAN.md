@@ -150,6 +150,9 @@ unavailable-neighbor predictor.
 Defining `SH264E_DISABLE_ARM_DSP` keeps the portable C loops, and both paths
 preserve the encoder bitstream checksum. The change adds no encoder-owned
 persistent SRAM.
+For NV12 input, the chroma DC path computes U and V 8x8 sums during one
+traversal of each interleaved UV block before applying the same quantization
+and CAVLC syntax as the I420 path.
 
 ## Scaler Fast-Path Status
 

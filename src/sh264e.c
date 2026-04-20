@@ -2334,6 +2334,37 @@ static uint32_t chroma_nv12_sum_u8x8(const sh264e_slice_t *slice,
     return sum;
 }
 
+static void chroma_nv12_sum_u8x8_pair(const sh264e_slice_t *slice,
+                                      unsigned src_x,
+                                      unsigned y,
+                                      uint32_t *out_u_sum,
+                                      uint32_t *out_v_sum)
+{
+    unsigned row;
+    uint32_t u_sum = 0u;
+    uint32_t v_sum = 0u;
+
+    for (row = 0; row < 8u; row++) {
+        const uint8_t *src = slice->plane[1] + (size_t)(y + row) * (size_t)slice->stride[1] +
+                             (size_t)src_x * 2u;
+#if defined(SH264E_USE_ARM_DSP)
+        u_sum = arm_usada8(pack_u8x4(src[0], src[2], src[4], src[6]), 0u, u_sum);
+        v_sum = arm_usada8(pack_u8x4(src[1], src[3], src[5], src[7]), 0u, v_sum);
+        u_sum = arm_usada8(pack_u8x4(src[8], src[10], src[12], src[14]), 0u, u_sum);
+        v_sum = arm_usada8(pack_u8x4(src[9], src[11], src[13], src[15]), 0u, v_sum);
+#else
+        unsigned col;
+        for (col = 0; col < 8u; col++) {
+            u_sum += src[(size_t)col * 2u];
+            v_sum += src[(size_t)col * 2u + 1u];
+        }
+#endif
+    }
+
+    *out_u_sum = u_sum;
+    *out_v_sum = v_sum;
+}
+
 static int chroma8x8_sum_delta(const sh264e_slice_t *slice,
                                unsigned plane,
                                unsigned src_x,
@@ -2347,6 +2378,21 @@ static int chroma8x8_sum_delta(const sh264e_slice_t *slice,
         sum = chroma_nv12_sum_u8x8(slice, plane, src_x, y);
     }
     return (int)sum - (SH264E_DC_PRED * 64);
+}
+
+static int quantize_chroma8x8_sum(sh264e_encoder_t *encoder, uint32_t sum)
+{
+    const int sum_delta = (int)sum - (SH264E_DC_PRED * 64);
+    int level = quantize_dc_delta((sum_delta + (sum_delta >= 0 ? 32 : -32)) / 64,
+                                  encoder->config.qp);
+
+    if (level > 0) {
+        level = 1;
+    } else if (level < 0) {
+        level = -1;
+    }
+
+    return level;
 }
 
 static int encode_luma4x4(sh264e_encoder_t *encoder,
@@ -2383,6 +2429,27 @@ static int encode_chroma8x8_dc(sh264e_encoder_t *encoder,
     }
 
     return level;
+}
+
+static void encode_chroma8x8_dc_pair(sh264e_encoder_t *encoder,
+                                     const sh264e_slice_t *slice,
+                                     unsigned mb_x,
+                                     int out_chroma_dc[2])
+{
+    const unsigned src_x = mb_x * (SH264E_MB_SIZE / 2u);
+
+    if (slice->pixfmt == SH264E_PIXFMT_NV12) {
+        uint32_t u_sum;
+        uint32_t v_sum;
+
+        chroma_nv12_sum_u8x8_pair(slice, src_x, 0u, &u_sum, &v_sum);
+        out_chroma_dc[0] = quantize_chroma8x8_sum(encoder, u_sum);
+        out_chroma_dc[1] = quantize_chroma8x8_sum(encoder, v_sum);
+        return;
+    }
+
+    out_chroma_dc[0] = encode_chroma8x8_dc(encoder, slice, 1u, mb_x, 0u, 0u);
+    out_chroma_dc[1] = encode_chroma8x8_dc(encoder, slice, 2u, mb_x, 0u, 0u);
 }
 
 static unsigned cavlc_coeff_token_table_for_nc(unsigned nC)
@@ -2533,8 +2600,7 @@ static sh264e_status_t write_idr_mb_slice_payload(sh264e_encoder_t *encoder,
         }
     }
 
-    chroma_dc[0] = encode_chroma8x8_dc(encoder, slice, 1u, mb_x, 0u, 0u);
-    chroma_dc[1] = encode_chroma8x8_dc(encoder, slice, 2u, mb_x, 0u, 0u);
+    encode_chroma8x8_dc_pair(encoder, slice, mb_x, chroma_dc);
     cbp_chroma = (chroma_dc[0] != 0 || chroma_dc[1] != 0) ? 1u : 0u;
     cbp = cbp_luma + cbp_chroma * 16u;
 

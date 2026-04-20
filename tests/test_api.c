@@ -518,6 +518,22 @@ static void make_i420_slice(const uint8_t *input, unsigned slice_index, sh264e_s
     slice->stride[2] = SH264E_V1_WIDTH / 2u;
 }
 
+static void make_nv12_from_i420(const uint8_t *i420, uint8_t *nv12)
+{
+    const size_t y_size = (size_t)SH264E_V1_WIDTH * SH264E_V1_HEIGHT;
+    const size_t c_size = (size_t)(SH264E_V1_WIDTH / 2u) * (SH264E_V1_HEIGHT / 2u);
+    const uint8_t *u = i420 + y_size;
+    const uint8_t *v = u + c_size;
+    uint8_t *uv = nv12 + y_size;
+    size_t i;
+
+    memcpy(nv12, i420, y_size);
+    for (i = 0; i < c_size; i++) {
+        uv[i * 2u] = u[i];
+        uv[i * 2u + 1u] = v[i];
+    }
+}
+
 int main(void)
 {
     sh264e_config_t config;
@@ -527,6 +543,8 @@ int main(void)
     sh264e_status_t status;
     uint8_t *input = NULL;
     uint8_t *output = NULL;
+    uint8_t *nv12_input = NULL;
+    uint8_t *nv12_output = NULL;
     size_t input_size;
     size_t output_capacity = 0;
     size_t header_capacity = 0;
@@ -539,6 +557,7 @@ int main(void)
     uint8_t *resize_work = NULL;
     uint8_t *encoder_arena_alloc = NULL;
     sh264e_encoder_t *arena_encoder = NULL;
+    sh264e_encoder_t *nv12_encoder = NULL;
     sh264e_jpeg_allocation_stats_t jpeg_alloc_stats;
     sh264e_encoder_memory_report_t encoder_memory_report;
     sh264e_jpeg_source_t bad_jpeg_source;
@@ -717,12 +736,17 @@ int main(void)
     input_size = (size_t)SH264E_V1_WIDTH * SH264E_V1_HEIGHT * 3u / 2u;
     input = (uint8_t *)malloc(input_size);
     output = (uint8_t *)malloc(output_capacity);
+    nv12_input = (uint8_t *)malloc(input_size);
+    nv12_output = (uint8_t *)malloc(output_capacity);
     slice_output = (uint8_t *)malloc(slice_capacity);
-    if (input == NULL || output == NULL || slice_output == NULL) {
+    if (input == NULL || output == NULL || nv12_input == NULL ||
+        nv12_output == NULL || slice_output == NULL) {
         fprintf(stderr, "allocation failed\n");
         sh264e_encoder_destroy(encoder);
         free(input);
         free(output);
+        free(nv12_input);
+        free(nv12_output);
         free(slice_output);
         return 1;
     }
@@ -876,6 +900,39 @@ int main(void)
     }
 
     {
+        sh264e_config_t nv12_config = config;
+        sh264e_frame_t nv12_frame;
+        size_t nv12_output_size = 0u;
+
+        make_nv12_from_i420(input, nv12_input);
+        nv12_config.pixfmt = SH264E_PIXFMT_NV12;
+        ok &= expect_status("create NV12 encoder",
+                            sh264e_encoder_create(&nv12_config, &nv12_encoder),
+                            SH264E_OK);
+        memset(&nv12_frame, 0, sizeof(nv12_frame));
+        nv12_frame.width = SH264E_V1_WIDTH;
+        nv12_frame.height = SH264E_V1_HEIGHT;
+        nv12_frame.pixfmt = SH264E_PIXFMT_NV12;
+        nv12_frame.plane[0] = nv12_input;
+        nv12_frame.plane[1] = nv12_input + (size_t)SH264E_V1_WIDTH * SH264E_V1_HEIGHT;
+        nv12_frame.stride[0] = SH264E_V1_WIDTH;
+        nv12_frame.stride[1] = SH264E_V1_WIDTH;
+        if (nv12_encoder != NULL) {
+            status = sh264e_encode_idr(nv12_encoder, &nv12_frame,
+                                       nv12_output, output_capacity, &nv12_output_size);
+            ok &= expect_status("NV12 equivalent encode idr", status, SH264E_OK);
+            if (status == SH264E_OK &&
+                (nv12_output_size != output_size ||
+                 memcmp(nv12_output, output, output_size) != 0)) {
+                fprintf(stderr, "NV12 equivalent encode differs from I420 output\n");
+                ok = 0;
+            }
+            sh264e_encoder_destroy(nv12_encoder);
+            nv12_encoder = NULL;
+        }
+    }
+
+    {
         sh264e_slice_t slice;
         unsigned i;
 
@@ -923,9 +980,12 @@ int main(void)
     }
 
     sh264e_encoder_destroy(arena_encoder);
+    sh264e_encoder_destroy(nv12_encoder);
     sh264e_encoder_destroy(encoder);
     free(input);
     free(output);
+    free(nv12_input);
+    free(nv12_output);
     free(slice_output);
     free(resize_work);
     free(small_input);
