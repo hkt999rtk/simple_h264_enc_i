@@ -151,6 +151,15 @@ ARM toolchain cannot build those ELFs, record the missing-tool output with the
 host CTest result and let the Ubuntu QEMU validation remain the correctness
 preflight.
 
+For the luma macroblock-analysis batching optimization, compare the
+before/after trend using the I420 caller-buffer encoder rows
+`sh264e_qemu_encoder_bench_m4`, `sh264e_qemu_encoder_bench_m4_portable`,
+`sh264e_qemu_encoder_bench_m7`, and
+`sh264e_qemu_encoder_bench_m7_portable`; plus the I420 streaming-consumer rows
+as controls for the output callback path. The optimization changes source
+analysis structure only, so bitstream checksum parity remains the correctness
+gate.
+
 For the exact-ratio row-kernel scaler optimization, compare the before/after
 trend using the scaler exact 2x rows
 `sh264e_qemu_scaler_bench_m4`, `sh264e_qemu_scaler_bench_m4_portable`,

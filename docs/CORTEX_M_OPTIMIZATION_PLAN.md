@@ -153,6 +153,11 @@ persistent SRAM.
 For NV12 input, the chroma DC path computes U and V 8x8 sums during one
 traversal of each interleaved UV block before applying the same quantization
 and CAVLC syntax as the I420 path.
+The luma DC path now scans each 16x16 macroblock once and accumulates all 16
+4x4 luma DC sums into the existing per-macroblock level storage before
+quantization. This keeps the fixed unavailable-neighbor prediction, CAVLC
+syntax, and encoder bitstream checksum unchanged while reducing repeated luma
+row traversal.
 
 ## Scaler Fast-Path Status
 

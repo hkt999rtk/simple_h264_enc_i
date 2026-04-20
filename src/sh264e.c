@@ -224,14 +224,6 @@ static sh264e_status_t sh264e_encode_jpeg_idr_streaming_impl(sh264e_encoder_t *e
                                                              void *consumer_user);
 static sh264e_status_t chunk_writer_put_byte(sh264e_chunk_writer_t *writer, uint8_t value);
 
-static const uint8_t k_luma4x4_x[16] = {
-    0, 4, 0, 4, 8, 12, 8, 12, 0, 4, 0, 4, 8, 12, 8, 12
-};
-
-static const uint8_t k_luma4x4_y[16] = {
-    0, 0, 4, 4, 0, 0, 4, 4, 8, 8, 12, 12, 8, 8, 12, 12
-};
-
 static const uint8_t k_cbp_intra_code_num[48] = {
     3, 29, 30, 17, 31, 18, 37, 8,
     32, 38, 19, 9, 20, 10, 11, 2,
@@ -2452,29 +2444,45 @@ static const uint8_t *slice_luma_row(const sh264e_slice_t *slice, unsigned y)
     return slice->plane[0] + (size_t)y * (size_t)slice->stride[0];
 }
 
-static int luma4x4_sum_delta(const sh264e_slice_t *slice, unsigned src_x, unsigned y)
+static unsigned luma4x4_block_index(unsigned row_group, unsigned col_group)
 {
+    return ((row_group & 2u) << 2u) |
+           ((col_group & 2u) << 1u) |
+           ((row_group & 1u) << 1u) |
+           (col_group & 1u);
+}
+
+static void luma16x16_sum_deltas(const sh264e_slice_t *slice, unsigned mb_x, int out_sum_delta[16])
+{
+    const unsigned src_x = mb_x * SH264E_MB_SIZE;
     unsigned row;
-#if defined(SH264E_USE_ARM_DSP)
-    uint32_t sum = 0u;
+    unsigned b;
 
-    for (row = 0; row < 4u; row++) {
-        const uint8_t *src = slice_luma_row(slice, y + row) + src_x;
-        sum = arm_usada8(pack_u8x4(src[0], src[1], src[2], src[3]), 0u, sum);
+    for (b = 0; b < 16u; b++) {
+        out_sum_delta[b] = 0;
     }
-    return (int)sum - (SH264E_DC_PRED * 16);
-#else
-    unsigned col;
-    int sum_delta = 0;
 
-    for (row = 0; row < 4u; row++) {
-        const uint8_t *src = slice_luma_row(slice, y + row) + src_x;
-        for (col = 0; col < 4u; col++) {
-            sum_delta += (int)src[col] - SH264E_DC_PRED;
+    for (row = 0; row < SH264E_MB_SIZE; row++) {
+        const uint8_t *src = slice_luma_row(slice, row) + src_x;
+        const unsigned row_group = row >> 2u;
+        unsigned col_group;
+
+        for (col_group = 0; col_group < 4u; col_group++) {
+            const unsigned block = luma4x4_block_index(row_group, col_group);
+            const uint8_t *group = src + (size_t)col_group * 4u;
+#if defined(SH264E_USE_ARM_DSP)
+            out_sum_delta[block] = (int)arm_usada8(pack_u8x4(group[0], group[1], group[2], group[3]),
+                                                   0u,
+                                                   (uint32_t)out_sum_delta[block]);
+#else
+            out_sum_delta[block] += (int)group[0] + (int)group[1] + (int)group[2] + (int)group[3];
+#endif
         }
     }
-    return sum_delta;
-#endif
+
+    for (b = 0; b < 16u; b++) {
+        out_sum_delta[b] -= SH264E_DC_PRED * 16;
+    }
 }
 
 static uint32_t chroma_i420_sum_u8x8(const sh264e_slice_t *slice,
@@ -2586,19 +2594,27 @@ static int quantize_chroma8x8_sum(sh264e_encoder_t *encoder, uint32_t sum)
     return level;
 }
 
-static int encode_luma4x4(sh264e_encoder_t *encoder,
-                          const sh264e_slice_t *slice,
-                          unsigned mb_x,
-                          unsigned x,
-                          unsigned y)
+static unsigned encode_luma16x16_dc_levels(sh264e_encoder_t *encoder,
+                                           const sh264e_slice_t *slice,
+                                           unsigned mb_x,
+                                           int levels[16])
 {
-    const unsigned src_x = mb_x * SH264E_MB_SIZE + x;
-    const int sum_delta = luma4x4_sum_delta(slice, src_x, y);
-    int level;
+    unsigned cbp_luma = 0u;
+    unsigned b;
 
-    level = quantize_dc_delta((sum_delta + (sum_delta >= 0 ? 8 : -8)) / 16, encoder->config.qp);
+    luma16x16_sum_deltas(slice, mb_x, levels);
+    for (b = 0; b < 16u; b++) {
+        const int sum_delta = levels[b];
+        const int level = quantize_dc_delta((sum_delta + (sum_delta >= 0 ? 8 : -8)) / 16,
+                                            encoder->config.qp);
 
-    return level;
+        levels[b] = level;
+        if (level != 0) {
+            cbp_luma |= 1u << (b / 4u);
+        }
+    }
+
+    return cbp_luma;
 }
 
 static int encode_chroma8x8_dc(sh264e_encoder_t *encoder,
@@ -2781,16 +2797,7 @@ static sh264e_status_t write_idr_mb_slice_payload(sh264e_encoder_t *encoder,
 
     write_idr_mb_slice_header(bw, row_index * SH264E_MBS_X + mb_x);
 
-    for (b = 0; b < 16u; b++) {
-        const unsigned x = k_luma4x4_x[b];
-        const unsigned y = k_luma4x4_y[b];
-        const int level = encode_luma4x4(encoder, slice, mb_x, x, y);
-        levels[b] = level;
-        if (level != 0) {
-            cbp_luma |= 1u << (b / 4u);
-        }
-    }
-
+    cbp_luma = encode_luma16x16_dc_levels(encoder, slice, mb_x, levels);
     encode_chroma8x8_dc_pair(encoder, slice, mb_x, chroma_dc);
     cbp_chroma = (chroma_dc[0] != 0 || chroma_dc[1] != 0) ? 1u : 0u;
     cbp = cbp_luma + cbp_chroma * 16u;

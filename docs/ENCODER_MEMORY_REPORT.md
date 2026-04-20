@@ -72,6 +72,10 @@ not change any encoder-owned memory block or the reported `296` byte total.
 The NV12 chroma pair-sum path also remains compute-only: it traverses each
 interleaved UV 8x8 block once to compute both chroma DC sums and does not add
 encoder arena storage.
+The luma macroblock analysis path remains compute-only: it reuses the existing
+per-macroblock `levels[16]` storage to accumulate all 16 luma 4x4 DC sums from
+one 16x16 source scan before quantization, so the encoder arena size and
+reported `296` byte total are unchanged.
 The byte-oriented bit-writer accumulator is internal writer state and does not
 change the `256` byte RBSP scratch block, encoder arena size, or reported
 `296` byte total.
