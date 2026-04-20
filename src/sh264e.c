@@ -3650,6 +3650,150 @@ static sh264e_status_t sh264e_encode_idr_slice_to_consumer_internal(
     return SH264E_OK;
 }
 
+#if SH264E_ENABLE_BENCH_HOOKS
+
+sh264e_status_t sh264e_bench_begin_idr_to_consumer(sh264e_encoder_t *encoder,
+                                                   uint8_t *chunk_buffer,
+                                                   size_t chunk_capacity,
+                                                   size_t *out_size,
+                                                   sh264e_output_consumer_t consumer,
+                                                   void *consumer_user)
+{
+    return sh264e_begin_idr_to_consumer(encoder, chunk_buffer, chunk_capacity,
+                                        out_size, consumer, consumer_user);
+}
+
+sh264e_status_t sh264e_bench_encode_idr_slice_to_consumer(
+    sh264e_encoder_t *encoder,
+    const sh264e_slice_t *slice,
+    uint8_t *chunk_buffer,
+    size_t chunk_capacity,
+    size_t *out_size,
+    sh264e_output_consumer_t consumer,
+    void *consumer_user)
+{
+    return sh264e_encode_idr_slice_to_consumer_internal(
+        encoder, slice, chunk_buffer, chunk_capacity, out_size,
+        consumer, consumer_user, 1);
+}
+
+sh264e_status_t sh264e_bench_encode_jpeg_stream_components(
+    sh264e_encoder_t *encoder,
+    const uint8_t *src_y,
+    ptrdiff_t src_y_stride,
+    const uint8_t *src_cb,
+    const uint8_t *src_cr,
+    ptrdiff_t src_c_stride,
+    uint32_t src_width,
+    uint32_t src_height,
+    sh264e_pixfmt_t output_pixfmt,
+    unsigned slice_count,
+    uint8_t *work_buffer,
+    size_t work_buffer_capacity,
+    uint8_t *chunk_buffer,
+    size_t chunk_capacity,
+    sh264e_output_consumer_t consumer,
+    void *consumer_user,
+    size_t *out_size)
+{
+    sh264e_jpeg_stream_context_t ctx;
+    size_t total = 0u;
+    unsigned slice_index;
+    sh264e_status_t status;
+
+    if (encoder == NULL || src_y == NULL || src_cb == NULL || src_cr == NULL ||
+        chunk_buffer == NULL || consumer == NULL || out_size == NULL) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+    *out_size = 0u;
+    if (!is_supported_pixfmt(output_pixfmt) ||
+        src_width < SH264E_RESIZE_MIN_SRC_WIDTH ||
+        src_width > SH264E_RESIZE_MAX_SRC_WIDTH ||
+        src_height < SH264E_RESIZE_MIN_SRC_HEIGHT ||
+        src_height > SH264E_RESIZE_MAX_SRC_HEIGHT ||
+        (src_width & 1u) != 0u ||
+        (src_height & 1u) != 0u ||
+        src_y_stride < (ptrdiff_t)src_width ||
+        src_c_stride < (ptrdiff_t)(src_width / 2u) ||
+        slice_count == 0u ||
+        slice_count > SH264E_V1_SLICE_COUNT ||
+        chunk_capacity == 0u) {
+        return SH264E_ERR_INVALID_ARGUMENT;
+    }
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.encoder = encoder;
+    ctx.work_buffer = work_buffer;
+    ctx.work_buffer_capacity = work_buffer_capacity;
+    ctx.out = chunk_buffer;
+    ctx.out_capacity = chunk_capacity;
+    ctx.consumer = consumer;
+    ctx.consumer_user = consumer_user;
+    ctx.output_pixfmt = output_pixfmt;
+    ctx.component_count = 3;
+    ctx.one_to_one_420 = src_width == SH264E_V1_WIDTH &&
+                         src_height == SH264E_V1_HEIGHT;
+    ctx.effective_slice_work_bytes =
+        ctx.one_to_one_420 ? 0u : resize_scaled_slice_buffer_size();
+    if (ctx.effective_slice_work_bytes != 0u) {
+        if (work_buffer == NULL) {
+            return SH264E_ERR_INVALID_ARGUMENT;
+        }
+        if (work_buffer_capacity < ctx.effective_slice_work_bytes) {
+            return SH264E_ERR_BUFFER_TOO_SMALL;
+        }
+    }
+
+    ctx.components[0].pixels = (uint8_t *)src_y;
+    ctx.components[0].width = src_width;
+    ctx.components[0].height = src_height;
+    ctx.components[0].stride = src_y_stride;
+    ctx.components[0].row0 = 0u;
+    ctx.components[0].rows = slice_count * SH264E_V1_SLICE_LUMA_HEIGHT * 2u + 16u;
+    if (ctx.components[0].rows > src_height) {
+        ctx.components[0].rows = src_height;
+    }
+
+    ctx.components[1].pixels = (uint8_t *)src_cb;
+    ctx.components[1].width = src_width / 2u;
+    ctx.components[1].height = src_height / 2u;
+    ctx.components[1].stride = src_c_stride;
+    ctx.components[1].row0 = 0u;
+    ctx.components[1].rows = slice_count * SH264E_V1_SLICE_CHROMA_HEIGHT * 2u + 8u;
+    if (ctx.components[1].rows > src_height / 2u) {
+        ctx.components[1].rows = src_height / 2u;
+    }
+
+    ctx.components[2] = ctx.components[1];
+    ctx.components[2].pixels = (uint8_t *)src_cr;
+
+    status = streaming_begin_idr(&ctx, &total);
+    if (status != SH264E_OK) {
+        return status;
+    }
+
+    for (slice_index = 0u; slice_index < slice_count; slice_index++) {
+        sh264e_slice_t slice;
+        size_t bytes = 0u;
+
+        if (output_pixfmt == SH264E_PIXFMT_I420) {
+            streaming_make_i420_slice(&ctx, slice_index, &slice);
+        } else {
+            streaming_make_nv12_slice(&ctx, slice_index, &slice);
+        }
+        status = streaming_encode_idr_slice(&ctx, &slice, &bytes);
+        if (status != SH264E_OK) {
+            return status;
+        }
+        total += bytes;
+    }
+
+    *out_size = total;
+    return SH264E_OK;
+}
+
+#endif
+
 sh264e_status_t sh264e_end_idr(sh264e_encoder_t *encoder)
 {
     if (encoder == NULL) {

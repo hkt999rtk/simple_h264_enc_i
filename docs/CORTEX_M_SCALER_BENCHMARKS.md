@@ -7,13 +7,13 @@ so cycle counts are not confused with emulator behavior.
 ## Scaler Scope
 
 The benchmark firmware in `tests/qemu_scaler_bench.c` exercises
-`sh264e_resize_make_slice` on a deterministic 1280x720 NV12 source. That
-geometry uses the exact 2x scaler fast path. Each run generates `BENCH_ITERS`
-encoder slices and writes:
-
-The JPEG MCU-row streaming path uses the same exact quarter-step sampler for
-matching 2x and 0.5x JPEG resize cases, but QEMU scaler firmware remains scoped
-to the raw resize API fixture so proxy timing rows stay comparable.
+`sh264e_resize_make_slice` on deterministic NV12 source rows. The default target
+uses the `1280x720 -> 2560x1440` exact 2x path. Additional QEMU targets compile
+the same firmware for 1:1 bypass, `5120x2880 -> 2560x1440` exact 0.5x, and a
+`1920x1080 -> 2560x1440` general bilinear path. The firmware retains only the
+source rows reached by the measured slice window, so benchmark-only buffers do
+not represent library persistent SRAM. Each run generates `BENCH_ITERS` encoder
+slices and writes:
 
 * `sh264e_bench_checksum` - nonzero correctness guard for the generated slices.
 * `sh264e_bench_cycles` - DWT cycle count around the resize loop.
@@ -25,16 +25,20 @@ cycles.
 ## Encoder Scope
 
 The benchmark firmware in `tests/qemu_encoder_bench.c` exercises the
-independent-MB progressive H.264 encoder path on eight deterministic raw I420
-input rows. Each run writes:
+independent-MB progressive H.264 encoder path on eight deterministic raw input
+rows. The default target uses I420 caller-buffer output and keeps the historical
+`0x5926e2e5` checksum assertion. Additional QEMU targets compile the same
+fixture for I420 streaming-consumer output and NV12 caller-buffer output. Each
+run writes:
 
 * `sh264e_bench_checksum` - correctness guard over the generated Annex B bytes.
 * `sh264e_bench_cycles` - DWT cycle count around `sh264e_begin_idr` plus eight `sh264e_encode_idr_slice` calls.
 
 Portable and DSP-capable builds must produce the same checksum for the same
-target fixture. The QEMU firmware checks the current expected checksum
-`0x5926e2e5`; treat any checksum mismatch as a correctness failure before
-comparing cycles.
+target fixture. The default I420 caller-buffer QEMU firmware checks the current
+expected checksum `0x5926e2e5`; expanded fixtures keep deterministic nonzero
+checksums exported through `sh264e_bench_checksum`. Treat any checksum mismatch
+or zero checksum as a correctness failure before comparing cycles.
 
 ## Expanded Coverage Target
 
@@ -56,8 +60,11 @@ Scaler coverage should include:
 * Exact `5120x2880 -> 2560x1440` 0.5x scaling.
 * A general bilinear case that does not use an exact-ratio fast path.
 
-JPEG coverage should include the MCU-row streaming resize/encode path, including
-the exact 2x and 0.5x resize cases already validated by integration tests.
+JPEG coverage includes benchmark-only QEMU firmware that feeds deterministic
+component rows into the same MCU-row streaming slice builder and streaming H.264
+consumer used by the production JPEG path. The QEMU fixture covers exact 2x and
+0.5x resize/encode paths without embedding large compressed JPEG fixtures.
+Integration tests remain responsible for compressed JPEG parser coverage.
 Benchmark-only buffers are allowed in firmware, but any library memory-budget
 change must update the memory reports and tests.
 
@@ -69,15 +76,7 @@ performance data for scaler or encoder optimizations.
 
 ```sh
 cmake -S . -B build-qemu -DSH264E_BUILD_QEMU_TESTS=ON
-cmake --build build-qemu --target \
-  sh264e_qemu_scaler_bench_m4 \
-  sh264e_qemu_scaler_bench_m4_portable \
-  sh264e_qemu_scaler_bench_m7 \
-  sh264e_qemu_scaler_bench_m7_portable \
-  sh264e_qemu_encoder_bench_m4 \
-  sh264e_qemu_encoder_bench_m4_portable \
-  sh264e_qemu_encoder_bench_m7 \
-  sh264e_qemu_encoder_bench_m7_portable
+cmake --build build-qemu --target sh264e_qemu_scaler_half_bench_m4 sh264e_qemu_encoder_i420_stream_bench_m4
 ctest --test-dir build-qemu -R 'sh264e_qemu_(scaler|encoder)_(smoke|bench)_(m4|m7)' --output-on-failure
 ```
 
@@ -131,16 +130,13 @@ the repository root:
 python3 tests/run_qemu_proxy_timing.py --build-dir build-qemu --repeat 7
 ```
 
-The default target set is:
-
-* `sh264e_qemu_scaler_bench_m4`
-* `sh264e_qemu_scaler_bench_m4_portable`
-* `sh264e_qemu_scaler_bench_m7`
-* `sh264e_qemu_scaler_bench_m7_portable`
-* `sh264e_qemu_encoder_bench_m4`
-* `sh264e_qemu_encoder_bench_m4_portable`
-* `sh264e_qemu_encoder_bench_m7`
-* `sh264e_qemu_encoder_bench_m7_portable`
+The default target set includes Cortex-M4 and Cortex-M7 DSP-capable and
+portable-C rows for scaler exact 2x, scaler 1:1 bypass, scaler exact 0.5x,
+scaler general bilinear, encoder I420 caller-buffer, encoder I420
+streaming-consumer, encoder NV12 caller-buffer, JPEG stream exact 2x, and JPEG
+stream exact 0.5x fixtures. Use
+`--list-targets` to print the exact target names and metadata for the current
+checkout.
 
 Use `--target <name>` to run a subset, `--format csv` for machine-readable
 output, and `--list-targets` to print the known target metadata without running

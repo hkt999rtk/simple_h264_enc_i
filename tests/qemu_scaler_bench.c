@@ -3,11 +3,25 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if SH264E_QEMU_SCALER_BYPASS
+#define SRC_W SH264E_V1_WIDTH
+#define SRC_H SH264E_V1_HEIGHT
+#elif SH264E_QEMU_SCALER_HALF
+#define SRC_W 5120u
+#define SRC_H 2880u
+#elif SH264E_QEMU_SCALER_GENERAL
+#define SRC_W 1920u
+#define SRC_H 1080u
+#else
 #define SRC_W 1280u
 #define SRC_H 720u
+#endif
+
+#define BENCH_ITERS 8u
+#define SRC_LUMA_ROWS 272u
+#define SRC_CHROMA_ROWS (SRC_LUMA_ROWS / 2u)
 #define WORK_SIZE ((size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_LUMA_HEIGHT + \
                    (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT)
-#define BENCH_ITERS 8u
 
 #define DEMCR (*(volatile uint32_t *)0xE000EDFCu)
 #define DWT_CTRL (*(volatile uint32_t *)0xE0001000u)
@@ -19,8 +33,8 @@ extern unsigned long _estack;
 extern unsigned long __bss_start__;
 extern unsigned long __bss_end__;
 
-static uint8_t src_y[(size_t)SRC_W * SRC_H];
-static uint8_t src_uv[(size_t)SRC_W * (SRC_H / 2u)];
+static uint8_t src_y[(size_t)SRC_W * SRC_LUMA_ROWS];
+static uint8_t src_uv[(size_t)SRC_W * SRC_CHROMA_ROWS];
 static uint8_t work[WORK_SIZE];
 volatile uint32_t sh264e_bench_cycles;
 volatile uint32_t sh264e_bench_checksum;
@@ -40,13 +54,13 @@ static void fill_source(void)
     uint32_t y;
     uint32_t x;
 
-    for (y = 0; y < SRC_H; y++) {
+    for (y = 0; y < SRC_LUMA_ROWS; y++) {
         uint8_t *row = src_y + (size_t)y * SRC_W;
         for (x = 0; x < SRC_W; x++) {
             row[x] = (uint8_t)((x * 3u + y * 5u) & 0xffu);
         }
     }
-    for (y = 0; y < SRC_H / 2u; y++) {
+    for (y = 0; y < SRC_CHROMA_ROWS; y++) {
         uint8_t *row = src_uv + (size_t)y * SRC_W;
         for (x = 0; x < SRC_W / 2u; x++) {
             row[(size_t)x * 2u] = (uint8_t)(80u + ((x + y) & 31u));
@@ -71,9 +85,15 @@ static int run_benchmark(void)
 {
     sh264e_frame_t frame;
     sh264e_slice_t slice;
-    size_t work_size = 0;
+    size_t work_size = 0u;
+    const size_t expected_work_size =
+#if SH264E_QEMU_SCALER_BYPASS
+        0u;
+#else
+        WORK_SIZE;
+#endif
     uint32_t iter;
-    uint32_t checksum = 0;
+    uint32_t checksum = 2166136261u;
 
     memset(&frame, 0, sizeof(frame));
     frame.width = SRC_W;
@@ -87,18 +107,27 @@ static int run_benchmark(void)
     if (sh264e_resize_get_slice_buffer_size(&frame, &work_size) != SH264E_OK) {
         return 1;
     }
-    if (work_size != WORK_SIZE) {
+    if (work_size != expected_work_size) {
         return 2;
     }
 
     dwt_start();
     for (iter = 0; iter < BENCH_ITERS; iter++) {
+        uint8_t *work_ptr = expected_work_size == 0u ? NULL : work;
+        size_t work_capacity = expected_work_size == 0u ? 0u : sizeof(work);
+
         if (sh264e_resize_make_slice(&frame, iter % SH264E_V1_SLICE_COUNT,
-                                     work, sizeof(work), &slice) != SH264E_OK) {
+                                     work_ptr, work_capacity, &slice) != SH264E_OK) {
             return 3;
         }
-        checksum += slice.plane[0][iter * 97u];
-        checksum += slice.plane[1][iter * 53u];
+        checksum ^= slice.plane[0][iter * 97u];
+        checksum *= 16777619u;
+        checksum ^= slice.plane[1][iter * 53u];
+        checksum *= 16777619u;
+        checksum ^= (uint32_t)slice.stride[0];
+        checksum *= 16777619u;
+        checksum ^= (uint32_t)slice.stride[1];
+        checksum *= 16777619u;
     }
     sh264e_bench_cycles = dwt_stop();
     sh264e_bench_checksum = checksum;
