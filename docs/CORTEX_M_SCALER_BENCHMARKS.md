@@ -142,6 +142,15 @@ Use `--target <name>` to run a subset, `--format csv` for machine-readable
 output, and `--list-targets` to print the known target metadata without running
 QEMU. The runner exits nonzero if any selected firmware exits nonzero.
 
+For the NV12 chroma pair-sum optimization, compare the before/after trend using
+the `sh264e_qemu_encoder_nv12_bench_m4`,
+`sh264e_qemu_encoder_nv12_bench_m4_portable`,
+`sh264e_qemu_encoder_nv12_bench_m7`, and
+`sh264e_qemu_encoder_nv12_bench_m7_portable` proxy timing rows. If the local
+ARM toolchain cannot build those ELFs, record the missing-tool output with the
+host CTest result and let the Ubuntu QEMU validation remain the correctness
+preflight.
+
 ## Simulator DWT And WFI Profile
 
 Use `docs/CORTEX_M_SIMULATOR_PROFILE.md` when validating local macOS simulator
