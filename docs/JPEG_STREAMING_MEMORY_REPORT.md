@@ -174,11 +174,13 @@ build/sh264e_encode_jpeg --format i420 \
   build/issue96_default_2880_i420.h264
 ```
 
-Expected metric lines:
+Expected metric lines. The `362` output-consumer chunks are two SPS/PPS
+header chunks plus four 4 KiB chunks for each of the 90 encoded input rows
+after row-level IDR NALU batching.
 
 ```text
 1280x720:
-jpeg output consumer chunks: 14402
+jpeg output consumer chunks: 362
 jpeg output chunk buffer bytes: 4096
 jpeg work arena bytes: 92304
 jpeg slice work bytes: 61440
@@ -188,7 +190,7 @@ jpeg streaming cache bytes: 61440
 jpeg output buffer bytes: 4096
 
 2560x1440:
-jpeg output consumer chunks: 14402
+jpeg output consumer chunks: 362
 jpeg output chunk buffer bytes: 4096
 jpeg work arena bytes: 123024
 jpeg slice work bytes: 0
@@ -198,7 +200,7 @@ jpeg streaming cache bytes: 61440
 jpeg output buffer bytes: 4096
 
 5120x2880:
-jpeg output consumer chunks: 14402
+jpeg output consumer chunks: 362
 jpeg output chunk buffer bytes: 4096
 jpeg work arena bytes: 491664
 jpeg slice work bytes: 61440
