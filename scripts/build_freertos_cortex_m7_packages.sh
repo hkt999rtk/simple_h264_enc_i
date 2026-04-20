@@ -101,6 +101,18 @@ else
     exit 1
 fi
 
+checksum_file_basename() {
+    local file="$1"
+    local dir
+    local base
+    dir="$(dirname "${file}")"
+    base="$(basename "${file}")"
+    (
+        cd "${dir}"
+        checksum_file "${base}"
+    )
+}
+
 mkdir -p "${output_dir}"
 output_dir="$(cd "${output_dir}" && pwd)"
 if [[ -z "${build_dir}" ]]; then
@@ -268,7 +280,7 @@ EOF
 
     rm -f "${archive}" "${archive}.sha256"
     tar -C "${package_root}" -cf - "${package_name}" | gzip -n > "${archive}"
-    checksum_file "${archive}" > "${archive}.sha256"
+    checksum_file_basename "${archive}" > "${archive}.sha256"
 
     validate_package "${archive}" "${package_name}" "${lib_path}" "${build_dir}/defined-symbols.txt"
     printf '%s\n' "${archive}"
