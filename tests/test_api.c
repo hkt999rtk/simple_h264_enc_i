@@ -841,6 +841,10 @@ int main(void)
     ok &= expect_resize_reference_slice("0.5x NV12 resize reference",
                                         5120u, 2880u, SH264E_PIXFMT_NV12,
                                         SH264E_V1_SLICE_COUNT - 1u);
+    ok &= expect_resize_reference_slice("general I420 resize reference",
+                                        1920u, 1080u, SH264E_PIXFMT_I420, 45u);
+    ok &= expect_resize_reference_slice("general NV12 resize reference",
+                                        1920u, 1080u, SH264E_PIXFMT_NV12, 73u);
 
     memset(&frame, 0, sizeof(frame));
     frame.width = SH264E_V1_WIDTH;
