@@ -686,6 +686,10 @@ static uint8_t bilinear_blend_u8(uint8_t p00,
     return (uint8_t)((blended + SH264E_SCALE_FP_BLEND_ROUND) >> (SH264E_SCALE_FP_BITS * 2u));
 }
 
+static uint8_t bilinear_finish_quarter_u8(uint32_t top,
+                                          uint32_t bottom,
+                                          unsigned wy_quarters);
+
 static uint8_t bilinear_blend_quarter_u8(uint8_t p00,
                                          uint8_t p01,
                                          uint8_t p10,
@@ -694,25 +698,70 @@ static uint8_t bilinear_blend_quarter_u8(uint8_t p00,
                                          unsigned wy_quarters)
 {
     const unsigned inv_wx = 4u - wx_quarters;
-    const unsigned inv_wy = 4u - wy_quarters;
+    uint32_t top;
+    uint32_t bottom;
 #if defined(SH264E_USE_ARM_DSP)
     const uint32_t packed_x_weights = (uint32_t)inv_wx | ((uint32_t)wx_quarters << 16u);
-    const uint32_t top = (uint32_t)arm_smlad((uint32_t)p00 | ((uint32_t)p01 << 16u),
-                                             packed_x_weights,
-                                             0);
-    const uint32_t bottom = (uint32_t)arm_smlad((uint32_t)p10 | ((uint32_t)p11 << 16u),
-                                                packed_x_weights,
-                                                0);
+
+    top = (uint32_t)arm_smlad((uint32_t)p00 | ((uint32_t)p01 << 16u),
+                              packed_x_weights,
+                              0);
+    bottom = (uint32_t)arm_smlad((uint32_t)p10 | ((uint32_t)p11 << 16u),
+                                 packed_x_weights,
+                                 0);
+#else
+    top = (uint32_t)p00 * inv_wx + (uint32_t)p01 * wx_quarters;
+    bottom = (uint32_t)p10 * inv_wx + (uint32_t)p11 * wx_quarters;
+#endif
+
+    return bilinear_finish_quarter_u8(top, bottom, wy_quarters);
+}
+
+static uint8_t bilinear_finish_quarter_u8(uint32_t top,
+                                          uint32_t bottom,
+                                          unsigned wy_quarters)
+{
+    const unsigned inv_wy = 4u - wy_quarters;
+#if defined(SH264E_USE_ARM_DSP)
     const uint32_t vertical = (uint32_t)arm_smlad(top | (bottom << 16u),
                                                   (uint32_t)inv_wy | ((uint32_t)wy_quarters << 16u),
                                                   0);
 #else
-    const uint32_t top = (uint32_t)p00 * inv_wx + (uint32_t)p01 * wx_quarters;
-    const uint32_t bottom = (uint32_t)p10 * inv_wx + (uint32_t)p11 * wx_quarters;
     const uint32_t vertical = top * inv_wy + bottom * wy_quarters;
 #endif
 
     return (uint8_t)((vertical + 8u) >> 4u);
+}
+
+static uint8_t bilinear_blend_quarter_half_u8(uint8_t p00,
+                                              uint8_t p01,
+                                              uint8_t p10,
+                                              uint8_t p11,
+                                              unsigned wy_quarters)
+{
+    const uint32_t top = ((uint32_t)p00 + (uint32_t)p01) << 1u;
+    const uint32_t bottom = ((uint32_t)p10 + (uint32_t)p11) << 1u;
+
+    return bilinear_finish_quarter_u8(top, bottom, wy_quarters);
+}
+
+static void bilinear_blend_quarter_phase13_u8(uint8_t p00,
+                                              uint8_t p01,
+                                              uint8_t p10,
+                                              uint8_t p11,
+                                              unsigned wy_quarters,
+                                              uint8_t *phase1,
+                                              uint8_t *phase3)
+{
+    const uint32_t top_sum = (uint32_t)p00 + (uint32_t)p01;
+    const uint32_t bottom_sum = (uint32_t)p10 + (uint32_t)p11;
+    const uint32_t top_phase1 = top_sum + ((uint32_t)p00 << 1u);
+    const uint32_t bottom_phase1 = bottom_sum + ((uint32_t)p10 << 1u);
+    const uint32_t top_phase3 = top_sum + ((uint32_t)p01 << 1u);
+    const uint32_t bottom_phase3 = bottom_sum + ((uint32_t)p11 << 1u);
+
+    *phase1 = bilinear_finish_quarter_u8(top_phase1, bottom_phase1, wy_quarters);
+    *phase3 = bilinear_finish_quarter_u8(top_phase3, bottom_phase3, wy_quarters);
 }
 
 static uint8_t bilinear_sample_plane_rows(const uint8_t *row0,
@@ -819,18 +868,17 @@ static void scale_exact_plane_row_quarter(const uint8_t *row0,
     if (mode == 1) {
         const uint32_t last_dst = dst_width - 1u;
         const uint32_t last_src = src_width - 1u;
+        uint32_t src_x;
 
         dst_row[0] = bilinear_blend_quarter_u8(row0[0], row0[0],
                                                row1[0], row1[0],
                                                0u, wy_quarters);
-        for (x = 1u; x < last_dst; x++) {
-            const uint32_t raw_quarters = x * 2u - 1u;
-            const uint32_t x0 = raw_quarters >> 2u;
-            const unsigned wx_quarters = (unsigned)(raw_quarters & 3u);
-
-            dst_row[x] = bilinear_blend_quarter_u8(row0[x0], row0[x0 + 1u],
-                                                   row1[x0], row1[x0 + 1u],
-                                                   wx_quarters, wy_quarters);
+        for (src_x = 0u, x = 1u; src_x + 1u < src_width; src_x++, x += 2u) {
+            bilinear_blend_quarter_phase13_u8(row0[src_x], row0[src_x + 1u],
+                                              row1[src_x], row1[src_x + 1u],
+                                              wy_quarters,
+                                              &dst_row[x],
+                                              &dst_row[x + 1u]);
         }
         dst_row[last_dst] = bilinear_blend_quarter_u8(row0[last_src], row0[last_src],
                                                       row1[last_src], row1[last_src],
@@ -839,11 +887,11 @@ static void scale_exact_plane_row_quarter(const uint8_t *row0,
     }
 
     for (x = 0; x < dst_width; x++) {
-        const uint32_t x0 = x * 2u;
-
-        dst_row[x] = bilinear_blend_quarter_u8(row0[x0], row0[x0 + 1u],
-                                               row1[x0], row1[x0 + 1u],
-                                               2u, wy_quarters);
+        dst_row[x] = bilinear_blend_quarter_half_u8(row0[0], row0[1],
+                                                    row1[0], row1[1],
+                                                    wy_quarters);
+        row0 += 2u;
+        row1 += 2u;
     }
 }
 
@@ -856,67 +904,70 @@ static void scale_exact_nv12_chroma_row_quarter(const uint8_t *row0,
                                                 unsigned wy_quarters)
 {
     uint32_t x;
-    unsigned c;
 
     if (mode == 1) {
         const uint32_t last_dst = dst_width - 1u;
         const uint32_t last_src = src_width - 1u;
+        const size_t last_src_x = (size_t)last_src * 2u;
+        const size_t last_dst_x = (size_t)last_dst * 2u;
+        uint32_t src_x;
 
-        for (c = 0; c < 2u; c++) {
-            dst_row[c] = bilinear_blend_quarter_u8(row0[c], row0[c],
-                                                   row1[c], row1[c],
-                                                   0u, wy_quarters);
-        }
-        for (x = 1u; x < last_dst; x++) {
-            const uint32_t raw_quarters = x * 2u - 1u;
-            const uint32_t x0 = raw_quarters >> 2u;
-            const unsigned wx_quarters = (unsigned)(raw_quarters & 3u);
+        dst_row[0] = bilinear_blend_quarter_u8(row0[0], row0[0],
+                                               row1[0], row1[0],
+                                               0u, wy_quarters);
+        dst_row[1] = bilinear_blend_quarter_u8(row0[1], row0[1],
+                                               row1[1], row1[1],
+                                               0u, wy_quarters);
+        for (src_x = 0u, x = 1u; src_x + 1u < src_width; src_x++, x += 2u) {
             const size_t dst_x = (size_t)x * 2u;
-            const size_t src_x0 = (size_t)x0 * 2u;
-            const size_t src_x1 = (size_t)(x0 + 1u) * 2u;
+            const size_t src_x0 = (size_t)src_x * 2u;
+            const size_t src_x1 = (size_t)(src_x + 1u) * 2u;
 
-            dst_row[dst_x] = bilinear_blend_quarter_u8(row0[src_x0],
-                                                       row0[src_x1],
-                                                       row1[src_x0],
-                                                       row1[src_x1],
-                                                       wx_quarters,
-                                                       wy_quarters);
-            dst_row[dst_x + 1u] = bilinear_blend_quarter_u8(row0[src_x0 + 1u],
-                                                            row0[src_x1 + 1u],
-                                                            row1[src_x0 + 1u],
-                                                            row1[src_x1 + 1u],
-                                                            wx_quarters,
+            bilinear_blend_quarter_phase13_u8(row0[src_x0],
+                                              row0[src_x1],
+                                              row1[src_x0],
+                                              row1[src_x1],
+                                              wy_quarters,
+                                              &dst_row[dst_x],
+                                              &dst_row[dst_x + 2u]);
+            bilinear_blend_quarter_phase13_u8(row0[src_x0 + 1u],
+                                              row0[src_x1 + 1u],
+                                              row1[src_x0 + 1u],
+                                              row1[src_x1 + 1u],
+                                              wy_quarters,
+                                              &dst_row[dst_x + 1u],
+                                              &dst_row[dst_x + 3u]);
+        }
+        dst_row[last_dst_x] = bilinear_blend_quarter_u8(row0[last_src_x],
+                                                        row0[last_src_x],
+                                                        row1[last_src_x],
+                                                        row1[last_src_x],
+                                                        0u,
+                                                        wy_quarters);
+        dst_row[last_dst_x + 1u] = bilinear_blend_quarter_u8(row0[last_src_x + 1u],
+                                                            row0[last_src_x + 1u],
+                                                            row1[last_src_x + 1u],
+                                                            row1[last_src_x + 1u],
+                                                            0u,
                                                             wy_quarters);
-        }
-        for (c = 0; c < 2u; c++) {
-            const size_t dst_x = (size_t)last_dst * 2u + c;
-            const size_t src_x = (size_t)last_src * 2u + c;
-
-            dst_row[dst_x] = bilinear_blend_quarter_u8(row0[src_x], row0[src_x],
-                                                       row1[src_x], row1[src_x],
-                                                       0u, wy_quarters);
-        }
         return;
     }
 
     for (x = 0; x < dst_width; x++) {
-        const uint32_t x0 = x * 2u;
         const size_t dst_x = (size_t)x * 2u;
-        const size_t src_x0 = (size_t)x0 * 2u;
-        const size_t src_x1 = (size_t)(x0 + 1u) * 2u;
 
-        dst_row[dst_x] = bilinear_blend_quarter_u8(row0[src_x0],
-                                                   row0[src_x1],
-                                                   row1[src_x0],
-                                                   row1[src_x1],
-                                                   2u,
-                                                   wy_quarters);
-        dst_row[dst_x + 1u] = bilinear_blend_quarter_u8(row0[src_x0 + 1u],
-                                                        row0[src_x1 + 1u],
-                                                        row1[src_x0 + 1u],
-                                                        row1[src_x1 + 1u],
-                                                        2u,
+        dst_row[dst_x] = bilinear_blend_quarter_half_u8(row0[0],
+                                                        row0[2],
+                                                        row1[0],
+                                                        row1[2],
                                                         wy_quarters);
+        dst_row[dst_x + 1u] = bilinear_blend_quarter_half_u8(row0[1],
+                                                            row0[3],
+                                                            row1[1],
+                                                            row1[3],
+                                                            wy_quarters);
+        row0 += 4u;
+        row1 += 4u;
     }
 }
 
@@ -935,6 +986,7 @@ static void scale_exact_component_pair_to_nv12_row_quarter(const uint8_t *cb_row
     if (mode == 1) {
         const uint32_t last_dst = dst_width - 1u;
         const uint32_t last_src = src_width - 1u;
+        uint32_t src_x;
 
         dst_row[0] = bilinear_blend_quarter_u8(cb_row0[0], cb_row0[0],
                                                cb_row1[0], cb_row1[0],
@@ -942,18 +994,23 @@ static void scale_exact_component_pair_to_nv12_row_quarter(const uint8_t *cb_row
         dst_row[1] = bilinear_blend_quarter_u8(cr_row0[0], cr_row0[0],
                                                cr_row1[0], cr_row1[0],
                                                0u, wy_quarters);
-        for (x = 1u; x < last_dst; x++) {
-            const uint32_t raw_quarters = x * 2u - 1u;
-            const uint32_t x0 = raw_quarters >> 2u;
-            const unsigned wx_quarters = (unsigned)(raw_quarters & 3u);
+        for (src_x = 0u, x = 1u; src_x + 1u < src_width; src_x++, x += 2u) {
             const size_t dst_x = (size_t)x * 2u;
 
-            dst_row[dst_x] = bilinear_blend_quarter_u8(cb_row0[x0], cb_row0[x0 + 1u],
-                                                       cb_row1[x0], cb_row1[x0 + 1u],
-                                                       wx_quarters, wy_quarters);
-            dst_row[dst_x + 1u] = bilinear_blend_quarter_u8(cr_row0[x0], cr_row0[x0 + 1u],
-                                                            cr_row1[x0], cr_row1[x0 + 1u],
-                                                            wx_quarters, wy_quarters);
+            bilinear_blend_quarter_phase13_u8(cb_row0[src_x],
+                                              cb_row0[src_x + 1u],
+                                              cb_row1[src_x],
+                                              cb_row1[src_x + 1u],
+                                              wy_quarters,
+                                              &dst_row[dst_x],
+                                              &dst_row[dst_x + 2u]);
+            bilinear_blend_quarter_phase13_u8(cr_row0[src_x],
+                                              cr_row0[src_x + 1u],
+                                              cr_row1[src_x],
+                                              cr_row1[src_x + 1u],
+                                              wy_quarters,
+                                              &dst_row[dst_x + 1u],
+                                              &dst_row[dst_x + 3u]);
         }
         dst_row[(size_t)last_dst * 2u] = bilinear_blend_quarter_u8(cb_row0[last_src],
                                                                    cb_row0[last_src],
@@ -971,15 +1028,22 @@ static void scale_exact_component_pair_to_nv12_row_quarter(const uint8_t *cb_row
     }
 
     for (x = 0; x < dst_width; x++) {
-        const uint32_t x0 = x * 2u;
         const size_t dst_x = (size_t)x * 2u;
 
-        dst_row[dst_x] = bilinear_blend_quarter_u8(cb_row0[x0], cb_row0[x0 + 1u],
-                                                   cb_row1[x0], cb_row1[x0 + 1u],
-                                                   2u, wy_quarters);
-        dst_row[dst_x + 1u] = bilinear_blend_quarter_u8(cr_row0[x0], cr_row0[x0 + 1u],
-                                                        cr_row1[x0], cr_row1[x0 + 1u],
-                                                        2u, wy_quarters);
+        dst_row[dst_x] = bilinear_blend_quarter_half_u8(cb_row0[0],
+                                                        cb_row0[1],
+                                                        cb_row1[0],
+                                                        cb_row1[1],
+                                                        wy_quarters);
+        dst_row[dst_x + 1u] = bilinear_blend_quarter_half_u8(cr_row0[0],
+                                                            cr_row0[1],
+                                                            cr_row1[0],
+                                                            cr_row1[1],
+                                                            wy_quarters);
+        cb_row0 += 2u;
+        cb_row1 += 2u;
+        cr_row0 += 2u;
+        cr_row1 += 2u;
     }
 }
 

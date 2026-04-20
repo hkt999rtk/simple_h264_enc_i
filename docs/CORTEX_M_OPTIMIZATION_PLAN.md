@@ -201,17 +201,18 @@ The raw resize API includes exact fixed-ratio fast paths for
 `1280x720 -> 2560x1440` and `5120x2880 -> 2560x1440`. These paths bypass the
 general axis mapper but keep the same half-pixel bilinear samples and rounding,
 so I420 and NV12 slices remain byte-exact with the reference scaler.
-The exact 2x and 0.5x paths now dispatch through dedicated row kernels for raw
-planar, raw NV12 chroma, and JPEG streaming resize output. The row kernels keep
-edge samples clamped to the same half-pixel bilinear coordinates while removing
-per-pixel coordinate structs, clamp branches, and mapper advances from the main
-exact-ratio loops.
+The exact 2x and 0.5x paths now dispatch through phase-unrolled dedicated row
+kernels for raw planar, raw NV12 chroma, and JPEG streaming resize output. The
+row kernels keep edge samples clamped to the same half-pixel bilinear
+coordinates while removing per-pixel coordinate structs, clamp branches, mapper
+advances, and exact-ratio phase derivation from the main loops.
 The JPEG MCU-row streaming path now uses the same exact-ratio quarter-step
 sampler for matching 2x and 0.5x source JPEGs while preserving the 1:1
 zero-slice-work path and rolling row-cache behavior.
 The exact-ratio blend now uses quarter-step integer weights. DSP-capable ARM
-builds use `smlad` for both horizontal pair sums and the final vertical pair sum
-in that exact path, while portable builds use the same 32-bit arithmetic.
+builds use `smlad` where it remains useful for exact-ratio pair sums, while the
+2x and 0.5x fixed phases reuse portable 32-bit partial sums before the final
+quarter-step vertical blend.
 This adds no persistent SRAM. QEMU remains a checksum preflight only, and
 real-board DWT timing is still required before making cycle-speed claims.
 

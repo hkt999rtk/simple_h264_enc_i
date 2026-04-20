@@ -201,8 +201,9 @@ tests in the same change.
 
 For exact-ratio phase-unrolled scaler kernels, compare the scaler exact 2x and
 exact 0.5x rows plus the JPEG streaming exact-ratio rows. The implementation
-must preserve the same half-pixel bilinear output as the current quarter-step
-row kernels; general bilinear rows are controls.
+preserves the same half-pixel bilinear output as the quarter-step row kernels
+while replacing per-pixel phase derivation with fixed 2x phase pairs and 0.5x
+half-phase row traversal; general bilinear rows are controls.
 
 ## Simulator DWT And WFI Profile
 
