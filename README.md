@@ -301,10 +301,12 @@ python3 tests/run_qemu_proxy_timing.py --build-dir build-qemu --repeat 7
 ```
 
 The Cortex-M4/M7 optimization roadmap is tracked in
-`docs/CORTEX_M_OPTIMIZATION_PLAN.md`. Implementation work must wait for its
-documented baseline dependencies, preserve public APIs by default, keep
-portable C fallbacks for guarded DSP paths, and avoid persistent SRAM growth
-unless the issue explicitly allows it.
+`docs/CORTEX_M_OPTIMIZATION_PLAN.md`, including the post-review performance
+backlog for general bilinear row hoisting, JPEG row-cache ring buffering,
+caller-buffer direct Annex B output, and exact-ratio scaler phase unrolling.
+Implementation work must wait for its documented baseline dependencies,
+preserve public APIs by default, keep portable C fallbacks for guarded DSP
+paths, and avoid persistent SRAM growth unless the issue explicitly allows it.
 
 Validate with ffmpeg:
 

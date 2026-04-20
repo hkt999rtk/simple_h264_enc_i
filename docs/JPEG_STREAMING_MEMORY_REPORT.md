@@ -45,6 +45,10 @@ Issue #96 routes JPEG streaming scale work through the same exact fixed-ratio
 quarter-step sampler as the raw resize API for `1280x720 -> 2560x1440` and
 `5120x2880 -> 2560x1440`, while preserving the 1:1 zero-slice-work path. Custom
 DHT baseline JPEGs remain supported.
+The next JPEG streaming performance target is to keep the same row-cache byte
+capacity while replacing the retained-row `memmove` advance with a logical ring
+buffer. That change should reduce SRAM copy bandwidth without changing public
+JPEG APIs, the no-full-component-frame invariant, or the memory numbers above.
 
 For callers that do not yet know JPEG geometry, `sh264e_jpeg_get_slice_buffer_size`
 still returns the conservative 61,440-byte worst-case slice work capacity.

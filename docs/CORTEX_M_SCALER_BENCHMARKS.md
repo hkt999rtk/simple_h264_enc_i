@@ -178,6 +178,32 @@ trend using the scaler exact 2x rows
 and 0.5x rows. The optimization is expected to move exact-ratio scaler rows
 while leaving 1:1 bypass and general bilinear rows as controls.
 
+For the general bilinear row-invariant hoisting optimization, compare the
+before/after trend using the scaler general bilinear rows
+`sh264e_qemu_scaler_general_bench_m4`,
+`sh264e_qemu_scaler_general_bench_m4_portable`,
+`sh264e_qemu_scaler_general_bench_m7`, and
+`sh264e_qemu_scaler_general_bench_m7_portable`. The 1:1 bypass and exact-ratio
+rows are controls and should remain checksum-identical.
+
+For the JPEG row-cache ring-buffer optimization, compare the before/after trend
+using the JPEG stream exact 2x and exact 0.5x rows plus the host ffmpeg
+integration memory metrics. The optimization should reduce SRAM copy bandwidth
+inside the streaming decoder bridge without changing the reported row-cache byte
+capacity or effective slice-work bytes.
+
+For the caller-buffer direct Annex B writer optimization, compare the
+caller-buffer encoder rows against the existing streaming-consumer rows. The
+caller-buffer rows should remain byte-identical to the streaming-consumer output
+for the same fixture. If the remaining encoder RBSP scratch accounting changes,
+update `docs/ENCODER_MEMORY_REPORT.md` and the corresponding memory regression
+tests in the same change.
+
+For exact-ratio phase-unrolled scaler kernels, compare the scaler exact 2x and
+exact 0.5x rows plus the JPEG streaming exact-ratio rows. The implementation
+must preserve the same half-pixel bilinear output as the current quarter-step
+row kernels; general bilinear rows are controls.
+
 ## Simulator DWT And WFI Profile
 
 Use `docs/CORTEX_M_SIMULATOR_PROFILE.md` when validating local macOS simulator

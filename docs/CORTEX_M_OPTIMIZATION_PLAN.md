@@ -44,13 +44,13 @@ status sections below:
 6. Remove the `2560x1440` JPEG 4:2:0 1:1 NV12 slice-work staging requirement.
 7. Evaluate exact DSP vertical blend optimization for the bilinear scaler.
 
-## Next Performance Backlog
+## Completed Performance Backlog
 
-The next optimization batch should focus on benchmark coverage first, then on
-hot-path structure that reduces callback overhead, repeated source scans, and
-per-pixel/per-block control flow. The default policy still applies: no public
-API changes, no persistent SRAM growth, and byte-identical output unless a
-separate documentation issue changes that rule.
+The most recent optimization batch focused on benchmark coverage first, then on
+hot-path structure that reduced callback overhead, repeated source scans, and
+per-pixel/per-block control flow. The default policy still applies to follow-up
+work: no public API changes, no persistent SRAM growth, and byte-identical
+output unless a separate documentation issue changes that rule.
 
 1. Expand encoder, scaler, and JPEG streaming benchmark coverage so later
    optimizations have stable before/after data.
@@ -66,6 +66,30 @@ separate documentation issue changes that rule.
    accumulates the 16 luma 4x4 sums.
 6. Specialize H.264 DC-only residual writers for fixed `nC=0`. Any small-level
    lookup tables must live in `.rodata`, not SRAM.
+
+## Post-Review Performance Backlog
+
+The next review-driven performance batch should target the remaining repeated
+work and avoidable SRAM traffic that is still visible in the current hot paths:
+
+1. Hoist general bilinear scaler row invariants so raw resize and JPEG streaming
+   general-ratio paths compute y mapping, clamped y rows, and row pointers once
+   per destination row instead of through per-pixel helpers.
+2. Replace the JPEG MCU-row streaming cache `memmove` advance with a logical
+   ring buffer so retained rows are not shifted in SRAM before appending the next
+   MCU row.
+3. Add a direct Annex B writer for caller-buffer IDR output so the caller-buffer
+   progressive and one-shot JPEG paths no longer build each macroblock RBSP and
+   replay it through a second Annex B pass.
+4. Phase-unroll exact 2x and 0.5x scaler row kernels where fixed half-pixel
+   phases allow reused partial sums. This is lower priority than the first three
+   items because it is a tighter micro-optimization.
+
+All four items must keep output byte-identical by default. The row-cache ring
+buffer and caller-buffer direct writer must not increase persistent SRAM. If the
+caller-buffer direct writer changes the remaining RBSP scratch requirement, the
+encoder memory report, diagnostics, and tests must be updated in the same
+change.
 
 ## Issue Dependency Graph
 
@@ -94,6 +118,18 @@ docs/backlog update
           -> luma 16x16 macroblock DC batch analysis
               -> fixed nC=0 CAVLC residual writers
       -> exact 2x/0.5x scaler dedicated row kernels
+```
+
+The post-review backlog should use this dependency graph:
+
+```text
+docs/backlog update
+  -> general bilinear row-invariant hoisting
+  -> JPEG row-cache ring buffer
+      -> JPEG streaming benchmark/memory closeout
+  -> caller-buffer direct Annex B writer
+      -> encoder memory report closeout if scratch accounting changes
+  -> exact-ratio phase-unrolled scaler kernels
 ```
 
 ## Validation Policy
