@@ -82,15 +82,14 @@ does not add SRAM, `.rodata`, or encoder arena storage.
 The byte-oriented bit-writer accumulator is internal writer state and does not
 change the `256` byte RBSP scratch block, encoder arena size, or reported
 `296` byte total.
-The streaming output-consumer path bypasses the RBSP scratch for IDR
-macroblock-slice NALUs by sending completed RBSP bytes directly through the
-Annex B emulation-prevention chunk writer. The scratch block remains part of
-the encoder report because SPS/PPS and caller-buffer progressive APIs still use
-it, so the reported total and caller-provided arena size are unchanged.
-The next caller-buffer output optimization should evaluate using the same direct
-Annex B writer model for caller-buffer IDR output. If that removes or changes
-the remaining RBSP scratch requirement, this report, the public diagnostic
-output, and the memory regression tests must be updated together.
+The streaming output-consumer path and caller-buffer progressive path bypass
+the RBSP scratch for IDR macroblock-slice NALUs by sending completed RBSP bytes
+directly through the Annex B emulation-prevention writer. The scratch block
+remains part of the encoder report because SPS/PPS still use it, so the
+reported total and caller-provided arena size are unchanged. If a future change
+removes or changes the remaining SPS/PPS scratch requirement, this report, the
+public diagnostic output, and the memory regression tests must be updated
+together.
 
 The JPEG tool prints the same report:
 
