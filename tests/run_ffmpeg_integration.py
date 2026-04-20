@@ -14,6 +14,8 @@ SMALL_WIDTH = 1280
 SMALL_HEIGHT = 720
 LARGE_WIDTH = 2560
 LARGE_HEIGHT = 1440
+GENERAL_WIDTH = 1920
+GENERAL_HEIGHT = 1080
 DOWNSCALE_WIDTH = 5120
 DOWNSCALE_HEIGHT = 2880
 JPEG_SLICE_WORK_BYTES = WIDTH * 16 + (WIDTH // 2) * 8 * 2
@@ -36,6 +38,7 @@ FULL_COMPONENT_BYTES_720P = {
     "yuvj444p": 2_764_800,
 }
 FULL_COMPONENT_BYTES_1440P_420 = 5_529_600
+FULL_COMPONENT_BYTES_GENERAL_420 = 3_110_400
 FULL_COMPONENT_BYTES_2880P_420 = 22_118_400
 PRODUCTION_MEMORY_720P_420 = {
     "work": 92_304,
@@ -896,6 +899,19 @@ def main():
     validate_bitstream(args.ffprobe, args.ffmpeg, large_streaming_output)
     compare_decoded_i420(args, large_jpeg_output, large_streaming_output,
                          "output_jpeg_1440p_yuvj420p_i420_streaming_compare")
+
+    general_jpeg_input = workdir / "input_1080p_yuvj420p.jpg"
+    make_color_jpeg_sized(args, general_jpeg_input, "yuvj420p", GENERAL_WIDTH, GENERAL_HEIGHT)
+    general_outputs = {}
+    for fmt in ("i420", "nv12"):
+        general_output = workdir / f"output_jpeg_1080p_yuvj420p_{fmt}.h264"
+        encode_jpeg(args, fmt, general_jpeg_input, general_output,
+                    max_peak_bytes=FULL_COMPONENT_BYTES_GENERAL_420,
+                    expected_exact_resize_mask=0)
+        validate_bitstream(args.ffprobe, args.ffmpeg, general_output)
+        general_outputs[fmt] = general_output
+    compare_decoded_i420(args, general_outputs["i420"], general_outputs["nv12"],
+                         "output_jpeg_1080p_yuvj420p_i420_nv12_compare")
 
     downscale_jpeg_input = workdir / "input_2880p_yuvj420p.jpg"
     make_color_jpeg_sized(args, downscale_jpeg_input, "yuvj420p", DOWNSCALE_WIDTH, DOWNSCALE_HEIGHT)

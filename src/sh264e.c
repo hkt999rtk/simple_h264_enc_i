@@ -764,18 +764,6 @@ static void bilinear_blend_quarter_phase13_u8(uint8_t p00,
     *phase3 = bilinear_finish_quarter_u8(top_phase3, bottom_phase3, wy_quarters);
 }
 
-static uint8_t bilinear_sample_plane_rows(const uint8_t *row0,
-                                          const uint8_t *row1,
-                                          uint32_t src_width,
-                                          sh264e_scale_coord_t sx,
-                                          uint32_t wy)
-{
-    const uint32_t x0 = sx.index;
-    const uint32_t x1 = x0 + 1u < src_width ? x0 + 1u : x0;
-
-    return bilinear_blend_u8(row0[x0], row0[x1], row1[x0], row1[x1], sx.fraction, wy);
-}
-
 static void scale_general_plane_row(const uint8_t *row0,
                                     const uint8_t *row1,
                                     uint32_t src_width,
@@ -864,6 +852,65 @@ static void scale_general_nv12_chroma_row(const uint8_t *row0,
                                                      row0[last_offset + 1u],
                                                      row1[last_offset + 1u],
                                                      row1[last_offset + 1u],
+                                                     0u, wy);
+    }
+}
+
+static void scale_general_component_pair_to_nv12_row(const uint8_t *cb_row0,
+                                                     const uint8_t *cb_row1,
+                                                     const uint8_t *cr_row0,
+                                                     const uint8_t *cr_row1,
+                                                     uint32_t src_width,
+                                                     uint8_t *dst_row,
+                                                     uint32_t dst_width,
+                                                     uint32_t wy)
+{
+    const uint64_t max_pos = (uint64_t)(src_width - 1u) * (uint64_t)SH264E_SCALE_FP_ONE;
+    const uint32_t last_x = src_width - 1u;
+    sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(src_width, dst_width, 0u);
+    uint32_t x = 0;
+
+    for (; x < dst_width && x_mapper.pos <= 0; x++) {
+        const size_t dst_offset = (size_t)x * 2u;
+
+        dst_row[dst_offset] = bilinear_blend_u8(cb_row0[0], cb_row0[0],
+                                                cb_row1[0], cb_row1[0],
+                                                0u, wy);
+        dst_row[dst_offset + 1u] = bilinear_blend_u8(cr_row0[0], cr_row0[0],
+                                                     cr_row1[0], cr_row1[0],
+                                                     0u, wy);
+        scale_axis_mapper_advance(&x_mapper);
+    }
+    for (; x < dst_width && (uint64_t)x_mapper.pos < max_pos; x++) {
+        const uint64_t raw_pos = (uint64_t)x_mapper.pos;
+        const uint32_t x0 = (uint32_t)(raw_pos >> SH264E_SCALE_FP_BITS);
+        const uint32_t wx = (uint32_t)(raw_pos & (uint64_t)(SH264E_SCALE_FP_ONE - 1u));
+        const size_t dst_offset = (size_t)x * 2u;
+
+        dst_row[dst_offset] = bilinear_blend_u8(cb_row0[x0],
+                                                cb_row0[x0 + 1u],
+                                                cb_row1[x0],
+                                                cb_row1[x0 + 1u],
+                                                wx, wy);
+        dst_row[dst_offset + 1u] = bilinear_blend_u8(cr_row0[x0],
+                                                     cr_row0[x0 + 1u],
+                                                     cr_row1[x0],
+                                                     cr_row1[x0 + 1u],
+                                                     wx, wy);
+        scale_axis_mapper_advance(&x_mapper);
+    }
+    for (; x < dst_width; x++) {
+        const size_t dst_offset = (size_t)x * 2u;
+
+        dst_row[dst_offset] = bilinear_blend_u8(cb_row0[last_x],
+                                                cb_row0[last_x],
+                                                cb_row1[last_x],
+                                                cb_row1[last_x],
+                                                0u, wy);
+        dst_row[dst_offset + 1u] = bilinear_blend_u8(cr_row0[last_x],
+                                                     cr_row0[last_x],
+                                                     cr_row1[last_x],
+                                                     cr_row1[last_x],
                                                      0u, wy);
     }
 }
@@ -1241,15 +1288,8 @@ static void streaming_scale_component_slice(const sh264e_jpeg_stream_component_t
         const uint32_t y1 = y0 + 1u < src->height ? y0 + 1u : y0;
         const uint8_t *row0 = streaming_component_row_ptr(src, y0);
         const uint8_t *row1 = streaming_component_row_ptr(src, y1);
-        sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(src->width, dst_width, 0u);
-        uint32_t x;
 
-        for (x = 0; x < dst_width; x++) {
-            const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, src->width);
-
-            dst_row[x] = bilinear_sample_plane_rows(row0, row1, src->width, sx, sy.fraction);
-            scale_axis_mapper_advance(&x_mapper);
-        }
+        scale_general_plane_row(row0, row1, src->width, dst_row, dst_width, sy.fraction);
         scale_axis_mapper_advance(&y_mapper);
     }
 }
@@ -1316,16 +1356,10 @@ static void streaming_scale_nv12_component_chroma_slice(const sh264e_jpeg_stream
         const uint8_t *cb_row1 = streaming_component_row_ptr(cb, y1);
         const uint8_t *cr_row0 = streaming_component_row_ptr(cr, y0);
         const uint8_t *cr_row1 = streaming_component_row_ptr(cr, y1);
-        sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(cb->width, SH264E_CHROMA_WIDTH, 0u);
-        uint32_t x;
 
-        for (x = 0; x < SH264E_CHROMA_WIDTH; x++) {
-            const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, cb->width);
-
-            row[(size_t)x * 2u] = bilinear_sample_plane_rows(cb_row0, cb_row1, cb->width, sx, sy.fraction);
-            row[(size_t)x * 2u + 1u] = bilinear_sample_plane_rows(cr_row0, cr_row1, cr->width, sx, sy.fraction);
-            scale_axis_mapper_advance(&x_mapper);
-        }
+        scale_general_component_pair_to_nv12_row(cb_row0, cb_row1, cr_row0, cr_row1,
+                                                 cb->width, row, SH264E_CHROMA_WIDTH,
+                                                 sy.fraction);
         scale_axis_mapper_advance(&y_mapper);
     }
 }

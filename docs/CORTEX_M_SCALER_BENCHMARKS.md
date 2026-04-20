@@ -234,9 +234,13 @@ the correctness gate before proxy timing is used to judge this change.
 
 For the JPEG streaming general x-loop specialization, compare the JPEG stream
 exact 2x and exact 0.5x rows as controls and add a general-ratio JPEG streaming
-benchmark row only if the fixture can remain small and deterministic. The host
-ffmpeg integration test remains responsible for compressed JPEG parser coverage
-and for decoded-frame comparison of the 0.5x downscale path.
+benchmark row only if the fixture can remain small and deterministic. The JPEG
+streaming general path now applies the row-level fixed-point x-loop structure to
+retained MCU rows for I420 output and to the Cb/Cr-to-NV12 bridge without adding
+persistent x-map storage. The host ffmpeg integration test covers a compressed
+`1920x1080 -> 2560x1440` general-ratio JPEG fixture, while remaining
+responsible for compressed JPEG parser coverage and decoded-frame comparison of
+the 0.5x downscale path.
 
 ## Simulator DWT And WFI Profile
 
