@@ -252,6 +252,11 @@ kernels for raw planar, raw NV12 chroma, and JPEG streaming resize output. The
 row kernels keep edge samples clamped to the same half-pixel bilinear
 coordinates while removing per-pixel coordinate structs, clamp branches, mapper
 advances, and exact-ratio phase derivation from the main loops.
+The raw general bilinear path keeps y mapping and source row pointers hoisted
+per output row, then uses row-level x helpers that split left/right clamped
+edges from the middle fixed-point x accumulator. This removes per-pixel
+coordinate structs and sample helper calls from the raw I420/NV12 general loops
+without adding persistent x-map storage or slice-work memory.
 The JPEG MCU-row streaming path now uses the same exact-ratio quarter-step
 sampler for matching 2x and 0.5x source JPEGs while preserving the 1:1
 zero-slice-work path and rolling row-cache behavior.

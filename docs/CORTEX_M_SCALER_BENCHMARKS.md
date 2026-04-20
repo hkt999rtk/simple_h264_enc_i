@@ -226,9 +226,11 @@ half-phase row traversal; general bilinear rows are controls.
 
 For the raw general bilinear x-loop specialization, compare the before/after
 trend using the scaler general bilinear rows and keep 1:1 plus exact-ratio rows
-as controls. The optimized path must not allocate a persistent x-coordinate map
-or expand slice work memory. Host byte-exact general-ratio tests and fixed QEMU
-checksums are required before using proxy timing to judge this change.
+as controls. The raw general path now uses row-level x helpers that advance
+fixed-point x state through the unclamped middle span and handle clamped edges
+separately, without allocating a persistent x-coordinate map or expanding slice
+work memory. Host byte-exact general-ratio tests and fixed QEMU checksums remain
+the correctness gate before proxy timing is used to judge this change.
 
 For the JPEG streaming general x-loop specialization, compare the JPEG stream
 exact 2x and exact 0.5x rows as controls and add a general-ratio JPEG streaming
