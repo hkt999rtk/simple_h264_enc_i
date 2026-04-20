@@ -160,6 +160,12 @@ as controls for the output callback path. The optimization changes source
 analysis structure only, so bitstream checksum parity remains the correctness
 gate.
 
+For the fixed `nC=0` luma residual-writer specialization, compare the
+before/after trend using the same I420 caller-buffer encoder rows. The
+specialization changes CAVLC syntax emission control flow only, so bitstream
+checksum parity remains the correctness gate and no scaler/JPEG rows are
+expected to move.
+
 For the exact-ratio row-kernel scaler optimization, compare the before/after
 trend using the scaler exact 2x rows
 `sh264e_qemu_scaler_bench_m4`, `sh264e_qemu_scaler_bench_m4_portable`,

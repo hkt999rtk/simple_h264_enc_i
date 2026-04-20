@@ -76,6 +76,9 @@ The luma macroblock analysis path remains compute-only: it reuses the existing
 per-macroblock `levels[16]` storage to accumulate all 16 luma 4x4 DC sums from
 one 16x16 source scan before quantization, so the encoder arena size and
 reported `296` byte total are unchanged.
+The fixed `nC=0` luma residual writer removes runtime coeff-token table
+selection from the independent-MB hot path without adding lookup tables, so it
+does not add SRAM, `.rodata`, or encoder arena storage.
 The byte-oriented bit-writer accumulator is internal writer state and does not
 change the `256` byte RBSP scratch block, encoder arena size, or reported
 `296` byte total.
