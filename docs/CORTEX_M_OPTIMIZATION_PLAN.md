@@ -230,10 +230,10 @@ The luma DC-only residual writer now uses the fixed unavailable-neighbor
 table at runtime. No lookup table was added, so the change does not move data
 into SRAM or `.rodata`.
 
-The JPEG/output-consumer streaming path now writes each completed IDR
-macroblock-slice RBSP byte directly through the Annex B emulation-prevention
-streamer instead of staging the macroblock in `encoder->rbsp` and replaying it.
-SPS/PPS and caller-buffer progressive APIs still use the 256-byte
-one-macroblock RBSP scratch, so the public encoder memory report and arena size
-stay unchanged. The direct path preserves byte-identical Annex B output and
-consumer failure propagation.
+The JPEG/output-consumer streaming path and caller-buffer progressive path now
+write each completed IDR macroblock-slice RBSP byte directly through the Annex B
+emulation-prevention writer instead of staging the macroblock in `encoder->rbsp`
+and replaying it. SPS/PPS still use the 256-byte one-macroblock RBSP scratch,
+so the public encoder memory report and arena size stay unchanged. The direct
+paths preserve byte-identical Annex B output, bounded-buffer overflow behavior,
+and consumer failure propagation.
