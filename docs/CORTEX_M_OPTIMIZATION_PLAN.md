@@ -91,6 +91,38 @@ caller-buffer direct writer changes the remaining RBSP scratch requirement, the
 encoder memory report, diagnostics, and tests must be updated in the same
 change.
 
+## Scaler Coverage And X-Loop Follow-Up Backlog
+
+The latest post-review implementation pass closed the row-invariant hoist,
+JPEG row-cache ring buffer, caller-buffer direct Annex B writer, and exact-ratio
+phase-unrolled scaler kernels. The next batch should first strengthen coverage
+around the modified scaler/JPEG paths, then optimize the remaining general
+bilinear x-coordinate inner loop without adding x-map storage or persistent
+SRAM:
+
+1. Add a host byte-exact scaler reference test for a non-exact-ratio resize,
+   such as `1920x1080 -> 2560x1440`, for both I420 and NV12. Exact 2x and 0.5x
+   coverage is not enough to guard the general mapper.
+2. Make scaler QEMU benchmark checksums fixed and fuller. The firmware should
+   hash enough generated slice output to detect spatial or phase regressions and
+   should compare against expected checksums per scaler target and variant, not
+   only check that a sparse checksum is nonzero.
+3. Add a decoded-frame comparison for the `5120x2880 -> 2560x1440` JPEG exact
+   0.5x path. Bitstream decodability and memory metrics can pass even when
+   row-cache indexing produces a spatially wrong image.
+4. Specialize the raw general bilinear x loop without a persistent x-map table.
+   The implementation should keep y mapping and row pointers hoisted per
+   destination row, split left/right clamped edge handling where useful, and
+   make the middle loop advance fixed-point x state with integer increments
+   instead of rebuilding coordinate structs or calling per-pixel mapping helpers.
+5. Apply the same general x-loop specialization to JPEG MCU-row streaming
+   scaler paths after the host/QEMU/JPEG coverage above is in place.
+
+All five items must preserve byte-identical scaler or encoded output unless a
+separate documentation issue changes that policy. Benchmark-only buffers may be
+used by tests or firmware, but the library must not add public APIs, persistent
+SRAM, full-frame decoded JPEG component planes, or full-frame scaler maps.
+
 ## Issue Dependency Graph
 
 ```text
@@ -130,6 +162,20 @@ docs/backlog update
   -> caller-buffer direct Annex B writer
       -> encoder memory report closeout if scratch accounting changes
   -> exact-ratio phase-unrolled scaler kernels
+```
+
+The scaler coverage and x-loop backlog should use this dependency graph:
+
+```text
+docs/scaler coverage and x-loop backlog update
+  -> host general-ratio scaler byte-exact reference
+      -> raw general bilinear x-loop specialization
+          -> JPEG streaming general x-loop specialization
+  -> fixed/fuller QEMU scaler checksums
+      -> raw general bilinear x-loop specialization
+      -> JPEG streaming general x-loop specialization
+  -> JPEG exact 0.5x decoded-frame comparison
+      -> JPEG streaming general x-loop specialization
 ```
 
 ## Validation Policy

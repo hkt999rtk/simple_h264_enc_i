@@ -137,6 +137,14 @@ The source-input stress cases feed generated JPEGs through chunk limits of 1, 2,
 across caller chunk boundaries. When `cjpeg` is available, the restart-marker
 fixture is also encoded through the source API to cover DRI/RST handling.
 
+The exact `5120x2880 -> 2560x1440` JPEG 0.5x path must also keep a
+decoded-frame comparison in integration coverage. Memory metrics, exact-resize
+dispatch flags, and ffmpeg decodability are necessary but not sufficient here:
+a row-cache indexing bug can still produce a valid H.264 stream with spatially
+wrong pixels. The comparison should decode the produced bitstream and compare
+the output against the same deterministic source path or an independent
+reference frame.
+
 The normal CTest suite also includes `sh264e_production_profile_symbols` when
 `nm` or `llvm-nm` is available. That check configures the embedded production
 profile with tools, tests, and JPEG test hooks disabled, then verifies the

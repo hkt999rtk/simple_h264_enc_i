@@ -22,6 +22,14 @@ Portable and DSP builds must produce the same checksum for the same target
 fixture. Treat a checksum mismatch as a correctness failure before comparing
 cycles.
 
+Scaler QEMU benchmark checksums should be fixed per target and variant once the
+fixture is stable. The checksum should cover the full generated slice output, or
+an equivalently strong deterministic byte stream, so QEMU catches phase, edge,
+and row-index regressions instead of merely proving that some output was
+produced. Sparse nonzero checksums are acceptable only for temporary bring-up
+firmware and should not be the final correctness gate for scaler optimization
+issues.
+
 ## Encoder Scope
 
 The benchmark firmware in `tests/qemu_encoder_bench.c` exercises the
@@ -59,6 +67,13 @@ Scaler coverage should include:
 * Exact `1280x720 -> 2560x1440` 2x scaling.
 * Exact `5120x2880 -> 2560x1440` 0.5x scaling.
 * A general bilinear case that does not use an exact-ratio fast path.
+
+Correctness coverage for the general bilinear path must include a host
+byte-exact reference test, not only QEMU benchmark firmware. A representative
+case is `1920x1080 -> 2560x1440` for both I420 and NV12. The test should compare
+the generated destination slice bytes against an independent half-pixel
+fixed-point bilinear reference so row-hoisting or x-loop specialization cannot
+silently change scaler output.
 
 JPEG coverage includes benchmark-only QEMU firmware that feeds deterministic
 component rows into the same MCU-row streaming slice builder and streaming H.264
@@ -204,6 +219,18 @@ exact 0.5x rows plus the JPEG streaming exact-ratio rows. The implementation
 preserves the same half-pixel bilinear output as the quarter-step row kernels
 while replacing per-pixel phase derivation with fixed 2x phase pairs and 0.5x
 half-phase row traversal; general bilinear rows are controls.
+
+For the raw general bilinear x-loop specialization, compare the before/after
+trend using the scaler general bilinear rows and keep 1:1 plus exact-ratio rows
+as controls. The optimized path must not allocate a persistent x-coordinate map
+or expand slice work memory. Host byte-exact general-ratio tests and fixed QEMU
+checksums are required before using proxy timing to judge this change.
+
+For the JPEG streaming general x-loop specialization, compare the JPEG stream
+exact 2x and exact 0.5x rows as controls and add a general-ratio JPEG streaming
+benchmark row only if the fixture can remain small and deterministic. The host
+ffmpeg integration test remains responsible for compressed JPEG parser coverage
+and for decoded-frame comparison of the 0.5x downscale path.
 
 ## Simulator DWT And WFI Profile
 
