@@ -30,6 +30,9 @@ follow-up work.
 
 ## Roadmap
 
+The original Cortex-M optimization batch is now implemented or covered by
+status sections below:
+
 1. Add H.264 encoder DWT benchmark firmware for Cortex-M4/M7.
 2. Optimize H.264 luma/chroma DC residual sums with `USAD8` or equivalent DSP
    guarded code.
@@ -40,6 +43,29 @@ follow-up work.
    `5120x2880 -> 2560x1440` for I420 and NV12.
 6. Remove the `2560x1440` JPEG 4:2:0 1:1 NV12 slice-work staging requirement.
 7. Evaluate exact DSP vertical blend optimization for the bilinear scaler.
+
+## Next Performance Backlog
+
+The next optimization batch should focus on benchmark coverage first, then on
+hot-path structure that reduces callback overhead, repeated source scans, and
+per-pixel/per-block control flow. The default policy still applies: no public
+API changes, no persistent SRAM growth, and byte-identical output unless a
+separate documentation issue changes that rule.
+
+1. Expand encoder, scaler, and JPEG streaming benchmark coverage so later
+   optimizations have stable before/after data.
+2. Batch H.264 streaming-consumer output per input row. One row should share one
+   chunk writer while emitting all 160 independent-MB IDR NALUs; only callback
+   chunk boundaries may change.
+3. Add an NV12 chroma DC path that computes U and V sums in one traversal of the
+   interleaved UV block.
+4. Add dedicated exact 2x and 0.5x scaler row kernels for raw resize and JPEG
+   MCU-row streaming. The kernels should keep edge pixels exact while avoiding
+   per-pixel coordinate structs, clamps, and mapper branches in the main loop.
+5. Batch luma 16x16 macroblock DC residual analysis so one macroblock scan
+   accumulates the 16 luma 4x4 sums.
+6. Specialize H.264 DC-only residual writers for fixed `nC=0`. Any small-level
+   lookup tables must live in `.rodata`, not SRAM.
 
 ## Issue Dependency Graph
 
@@ -56,6 +82,18 @@ PR #73 h264 scratch/CAVLC cleanup
 
 PR #73 h264 scratch/CAVLC cleanup
   -> JPEG/NV12 1:1 zero-slice-work path
+```
+
+The next backlog should use this dependency graph:
+
+```text
+docs/backlog update
+  -> expanded encoder/scaler/JPEG benchmarks
+      -> row-level streaming output batching
+      -> NV12 chroma pair-sum DC path
+          -> luma 16x16 macroblock DC batch analysis
+              -> fixed nC=0 CAVLC residual writers
+      -> exact 2x/0.5x scaler dedicated row kernels
 ```
 
 ## Validation Policy

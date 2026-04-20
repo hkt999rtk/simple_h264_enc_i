@@ -36,6 +36,31 @@ target fixture. The QEMU firmware checks the current expected checksum
 `0x5926e2e5`; treat any checksum mismatch as a correctness failure before
 comparing cycles.
 
+## Expanded Coverage Target
+
+The current benchmark firmware is intentionally small, but the next performance
+batch needs broader coverage before more hot-path tuning lands. New benchmark
+coverage should keep the existing checksum-first policy and should not change
+public APIs or library persistent SRAM budgets.
+
+Encoder coverage should include:
+
+* I420 caller-buffer progressive encode.
+* I420 streaming-consumer progressive encode.
+* NV12 progressive encode.
+
+Scaler coverage should include:
+
+* 1:1 bypass.
+* Exact `1280x720 -> 2560x1440` 2x scaling.
+* Exact `5120x2880 -> 2560x1440` 0.5x scaling.
+* A general bilinear case that does not use an exact-ratio fast path.
+
+JPEG coverage should include the MCU-row streaming resize/encode path, including
+the exact 2x and 0.5x resize cases already validated by integration tests.
+Benchmark-only buffers are allowed in firmware, but any library memory-budget
+change must update the memory reports and tests.
+
 ## QEMU Preflight
 
 Use QEMU to verify that firmware builds, boots, exits through semihosting, and
