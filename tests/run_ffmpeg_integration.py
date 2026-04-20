@@ -323,8 +323,7 @@ def compare_decoded_i420(args, reference_bitstream, candidate_bitstream, stem):
     candidate_hash = decode_i420_frame(args, candidate_bitstream, candidate_raw)
     if reference_hash != candidate_hash:
         raise RuntimeError(
-            "decoded frame mismatch between component-plane and streaming JPEG paths: "
-            f"{reference_hash} != {candidate_hash}"
+            f"decoded frame mismatch for {stem}: {reference_hash} != {candidate_hash}"
         )
 
 
@@ -900,15 +899,26 @@ def main():
 
     downscale_jpeg_input = workdir / "input_2880p_yuvj420p.jpg"
     make_color_jpeg_sized(args, downscale_jpeg_input, "yuvj420p", DOWNSCALE_WIDTH, DOWNSCALE_HEIGHT)
+    downscale_outputs = {}
     for fmt in ("i420", "nv12"):
         downscale_output = workdir / f"output_jpeg_2880p_yuvj420p_{fmt}.h264"
+        downscale_streaming_output = workdir / f"output_jpeg_streaming_2880p_yuvj420p_{fmt}.h264"
         encode_jpeg(args, fmt, downscale_jpeg_input, downscale_output,
                     expected_cache_bytes=STREAMING_CACHE_BYTES_2880P_420,
                     max_peak_bytes=FULL_COMPONENT_BYTES_2880P_420,
                     expected_work_bytes=PRODUCTION_MEMORY_2880P_420["work"],
                     expected_peak_bytes=PRODUCTION_MEMORY_2880P_420["peak"],
                     expected_exact_resize_mask=JPEG_EXACT_RESIZE_HALF_MASK)
+        encode_jpeg_streaming_prototype(args, fmt, downscale_jpeg_input, downscale_streaming_output,
+                                        STREAMING_CACHE_BYTES_2880P_420,
+                                        expected_exact_resize_mask=JPEG_EXACT_RESIZE_HALF_MASK)
         validate_bitstream(args.ffprobe, args.ffmpeg, downscale_output)
+        validate_bitstream(args.ffprobe, args.ffmpeg, downscale_streaming_output)
+        compare_decoded_i420(args, downscale_output, downscale_streaming_output,
+                             f"output_jpeg_2880p_yuvj420p_{fmt}_streaming_compare")
+        downscale_outputs[fmt] = downscale_output
+    compare_decoded_i420(args, downscale_outputs["i420"], downscale_outputs["nv12"],
+                         "output_jpeg_2880p_yuvj420p_i420_nv12_compare")
 
     if args.cjpeg:
         restart_jpeg_input = workdir / "input_720p_yuvj420p_restart.jpg"
