@@ -714,37 +714,27 @@ static uint8_t bilinear_blend_quarter_u8(uint8_t p00,
     return (uint8_t)((vertical + 8u) >> 4u);
 }
 
-static uint8_t bilinear_sample_plane_mapped(const uint8_t *src,
-                                            uint32_t src_width,
-                                            uint32_t src_height,
-                                            ptrdiff_t src_stride,
-                                            sh264e_scale_coord_t sx,
-                                            sh264e_scale_coord_t sy)
+static uint8_t bilinear_sample_plane_rows(const uint8_t *row0,
+                                          const uint8_t *row1,
+                                          uint32_t src_width,
+                                          sh264e_scale_coord_t sx,
+                                          uint32_t wy)
 {
     const uint32_t x0 = sx.index;
-    const uint32_t y0 = sy.index;
     const uint32_t x1 = x0 + 1u < src_width ? x0 + 1u : x0;
-    const uint32_t y1 = y0 + 1u < src_height ? y0 + 1u : y0;
-    const uint8_t *row0 = src + (size_t)y0 * (size_t)src_stride;
-    const uint8_t *row1 = src + (size_t)y1 * (size_t)src_stride;
 
-    return bilinear_blend_u8(row0[x0], row0[x1], row1[x0], row1[x1], sx.fraction, sy.fraction);
+    return bilinear_blend_u8(row0[x0], row0[x1], row1[x0], row1[x1], sx.fraction, wy);
 }
 
-static uint8_t bilinear_sample_nv12_chroma_mapped(const uint8_t *src,
-                                                  uint32_t src_width,
-                                                  uint32_t src_height,
-                                                  ptrdiff_t src_stride,
-                                                  unsigned component,
-                                                  sh264e_scale_coord_t sx,
-                                                  sh264e_scale_coord_t sy)
+static uint8_t bilinear_sample_nv12_chroma_rows(const uint8_t *row0,
+                                                const uint8_t *row1,
+                                                uint32_t src_width,
+                                                unsigned component,
+                                                sh264e_scale_coord_t sx,
+                                                uint32_t wy)
 {
     const uint32_t x0 = sx.index;
-    const uint32_t y0 = sy.index;
     const uint32_t x1 = x0 + 1u < src_width ? x0 + 1u : x0;
-    const uint32_t y1 = y0 + 1u < src_height ? y0 + 1u : y0;
-    const uint8_t *row0 = src + (size_t)y0 * (size_t)src_stride;
-    const uint8_t *row1 = src + (size_t)y1 * (size_t)src_stride;
     const size_t c = component;
 
     return bilinear_blend_u8(row0[(size_t)x0 * 2u + c],
@@ -752,7 +742,7 @@ static uint8_t bilinear_sample_nv12_chroma_mapped(const uint8_t *src,
                              row1[(size_t)x0 * 2u + c],
                              row1[(size_t)x1 * 2u + c],
                              sx.fraction,
-                             sy.fraction);
+                             wy);
 }
 
 static int exact_scale_ratio_mode(uint32_t src_width,
@@ -1038,37 +1028,6 @@ static const uint8_t *streaming_component_row_ptr(const sh264e_jpeg_stream_compo
     return src->pixels + (size_t)y * (size_t)src->stride;
 }
 
-static uint8_t streaming_bilinear_sample_plane(const sh264e_jpeg_stream_component_t *src,
-                                               sh264e_scale_coord_t sx,
-                                               sh264e_scale_coord_t sy)
-{
-    uint32_t y0 = sy.index;
-    uint32_t y1 = y0 + 1u < src->height ? y0 + 1u : y0;
-    const uint32_t x0 = sx.index;
-    const uint32_t x1 = x0 + 1u < src->width ? x0 + 1u : x0;
-    const uint8_t *row0;
-    const uint8_t *row1;
-
-    if (y0 < src->row0) {
-        y0 = src->row0;
-    }
-    if (y1 < src->row0) {
-        y1 = src->row0;
-    }
-    y0 -= src->row0;
-    y1 -= src->row0;
-    if (y0 >= src->rows) {
-        y0 = src->rows - 1u;
-    }
-    if (y1 >= src->rows) {
-        y1 = src->rows - 1u;
-    }
-
-    row0 = src->pixels + (size_t)y0 * (size_t)src->stride;
-    row1 = src->pixels + (size_t)y1 * (size_t)src->stride;
-    return bilinear_blend_u8(row0[x0], row0[x1], row1[x0], row1[x1], sx.fraction, sy.fraction);
-}
-
 static void streaming_scale_component_exact_slice(const sh264e_jpeg_stream_component_t *src,
                                                   uint8_t *dst,
                                                   uint32_t dst_width,
@@ -1131,13 +1090,17 @@ static void streaming_scale_component_slice(const sh264e_jpeg_stream_component_t
     for (y = 0; y < dst_rows; y++) {
         uint8_t *dst_row = dst + (size_t)y * (size_t)dst_stride;
         const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, src->height);
+        const uint32_t y0 = sy.index;
+        const uint32_t y1 = y0 + 1u < src->height ? y0 + 1u : y0;
+        const uint8_t *row0 = streaming_component_row_ptr(src, y0);
+        const uint8_t *row1 = streaming_component_row_ptr(src, y1);
         sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(src->width, dst_width, 0u);
         uint32_t x;
 
         for (x = 0; x < dst_width; x++) {
             const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, src->width);
 
-            dst_row[x] = streaming_bilinear_sample_plane(src, sx, sy);
+            dst_row[x] = bilinear_sample_plane_rows(row0, row1, src->width, sx, sy.fraction);
             scale_axis_mapper_advance(&x_mapper);
         }
         scale_axis_mapper_advance(&y_mapper);
@@ -1200,14 +1163,20 @@ static void streaming_scale_nv12_component_chroma_slice(const sh264e_jpeg_stream
     for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
         uint8_t *row = dst_uv + (size_t)y * SH264E_V1_WIDTH;
         const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, cb->height);
+        const uint32_t y0 = sy.index;
+        const uint32_t y1 = y0 + 1u < cb->height ? y0 + 1u : y0;
+        const uint8_t *cb_row0 = streaming_component_row_ptr(cb, y0);
+        const uint8_t *cb_row1 = streaming_component_row_ptr(cb, y1);
+        const uint8_t *cr_row0 = streaming_component_row_ptr(cr, y0);
+        const uint8_t *cr_row1 = streaming_component_row_ptr(cr, y1);
         sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(cb->width, SH264E_CHROMA_WIDTH, 0u);
         uint32_t x;
 
         for (x = 0; x < SH264E_CHROMA_WIDTH; x++) {
             const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, cb->width);
 
-            row[(size_t)x * 2u] = streaming_bilinear_sample_plane(cb, sx, sy);
-            row[(size_t)x * 2u + 1u] = streaming_bilinear_sample_plane(cr, sx, sy);
+            row[(size_t)x * 2u] = bilinear_sample_plane_rows(cb_row0, cb_row1, cb->width, sx, sy.fraction);
+            row[(size_t)x * 2u + 1u] = bilinear_sample_plane_rows(cr_row0, cr_row1, cr->width, sx, sy.fraction);
             scale_axis_mapper_advance(&x_mapper);
         }
         scale_axis_mapper_advance(&y_mapper);
@@ -1763,13 +1732,17 @@ static void resize_scale_plane_slice(const uint8_t *src,
     for (y = 0; y < dst_rows; y++) {
         uint8_t *dst_row = dst + (size_t)y * (size_t)dst_stride;
         const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, src_height);
+        const uint32_t y0 = sy.index;
+        const uint32_t y1 = y0 + 1u < src_height ? y0 + 1u : y0;
+        const uint8_t *row0 = src + (size_t)y0 * (size_t)src_stride;
+        const uint8_t *row1 = src + (size_t)y1 * (size_t)src_stride;
         sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(src_width, dst_width, 0u);
         uint32_t x;
 
         for (x = 0; x < dst_width; x++) {
             const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, src_width);
 
-            dst_row[x] = bilinear_sample_plane_mapped(src, src_width, src_height, src_stride, sx, sy);
+            dst_row[x] = bilinear_sample_plane_rows(row0, row1, src_width, sx, sy.fraction);
             scale_axis_mapper_advance(&x_mapper);
         }
         scale_axis_mapper_advance(&y_mapper);
@@ -1820,26 +1793,20 @@ static void resize_scale_nv12_chroma_slice(const uint8_t *src_uv,
     for (y = 0; y < SH264E_V1_SLICE_CHROMA_HEIGHT; y++) {
         uint8_t *dst_row = dst_uv + (size_t)y * SH264E_V1_WIDTH;
         const sh264e_scale_coord_t sy = scale_coord_from_raw(y_mapper.pos, src_chroma_height);
+        const uint32_t y0 = sy.index;
+        const uint32_t y1 = y0 + 1u < src_chroma_height ? y0 + 1u : y0;
+        const uint8_t *row0 = src_uv + (size_t)y0 * (size_t)src_stride;
+        const uint8_t *row1 = src_uv + (size_t)y1 * (size_t)src_stride;
         sh264e_axis_mapper_t x_mapper = scale_axis_mapper_init(src_chroma_width, SH264E_CHROMA_WIDTH, 0u);
         uint32_t x;
 
         for (x = 0; x < SH264E_CHROMA_WIDTH; x++) {
             const sh264e_scale_coord_t sx = scale_coord_from_raw(x_mapper.pos, src_chroma_width);
 
-            dst_row[(size_t)x * 2u] = bilinear_sample_nv12_chroma_mapped(src_uv,
-                                                                         src_chroma_width,
-                                                                         src_chroma_height,
-                                                                         src_stride,
-                                                                         0u,
-                                                                         sx,
-                                                                         sy);
-            dst_row[(size_t)x * 2u + 1u] = bilinear_sample_nv12_chroma_mapped(src_uv,
-                                                                              src_chroma_width,
-                                                                              src_chroma_height,
-                                                                              src_stride,
-                                                                              1u,
-                                                                              sx,
-                                                                              sy);
+            dst_row[(size_t)x * 2u] =
+                bilinear_sample_nv12_chroma_rows(row0, row1, src_chroma_width, 0u, sx, sy.fraction);
+            dst_row[(size_t)x * 2u + 1u] =
+                bilinear_sample_nv12_chroma_rows(row0, row1, src_chroma_width, 1u, sx, sy.fraction);
             scale_axis_mapper_advance(&x_mapper);
         }
         scale_axis_mapper_advance(&y_mapper);
