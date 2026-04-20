@@ -277,14 +277,15 @@ The QEMU benchmark preflight targets are:
 
 | Target | CPU / machine | Variant | Purpose |
 | --- | --- | --- | --- |
-| `sh264e_qemu_scaler_bench_m4` | `cortex-m4` / `mps2-an386` | default DSP-capable build | firmware boot, semihosting exit, checksum, cycle counter plumbing |
-| `sh264e_qemu_scaler_bench_m4_portable` | `cortex-m4` / `mps2-an386` | `SH264E_DISABLE_ARM_DSP` | portable C comparison preflight |
-| `sh264e_qemu_scaler_bench_m7` | `cortex-m7` / `mps2-an500` | default DSP-capable build | M7 benchmark preflight |
-| `sh264e_qemu_scaler_bench_m7_portable` | `cortex-m7` / `mps2-an500` | `SH264E_DISABLE_ARM_DSP` | M7 portable C comparison preflight |
-| `sh264e_qemu_encoder_bench_m4` | `cortex-m4` / `mps2-an386` | default DSP-capable build | progressive H.264 encoder benchmark preflight |
-| `sh264e_qemu_encoder_bench_m4_portable` | `cortex-m4` / `mps2-an386` | `SH264E_DISABLE_ARM_DSP` | encoder portable C comparison preflight |
-| `sh264e_qemu_encoder_bench_m7` | `cortex-m7` / `mps2-an500` | default DSP-capable build | M7 encoder benchmark preflight |
-| `sh264e_qemu_encoder_bench_m7_portable` | `cortex-m7` / `mps2-an500` | `SH264E_DISABLE_ARM_DSP` | M7 encoder portable C comparison preflight |
+| `sh264e_qemu_scaler_bench_*` | `cortex-m4` / `mps2-an386`, `cortex-m7` / `mps2-an500` | DSP-capable and `SH264E_DISABLE_ARM_DSP` | exact 2x scaler benchmark preflight |
+| `sh264e_qemu_scaler_bypass_bench_*` | `cortex-m4` / `mps2-an386`, `cortex-m7` / `mps2-an500` | DSP-capable and `SH264E_DISABLE_ARM_DSP` | 1:1 bypass scaler benchmark preflight |
+| `sh264e_qemu_scaler_half_bench_*` | `cortex-m4` / `mps2-an386`, `cortex-m7` / `mps2-an500` | DSP-capable and `SH264E_DISABLE_ARM_DSP` | exact 0.5x scaler benchmark preflight |
+| `sh264e_qemu_scaler_general_bench_*` | `cortex-m4` / `mps2-an386`, `cortex-m7` / `mps2-an500` | DSP-capable and `SH264E_DISABLE_ARM_DSP` | general bilinear scaler benchmark preflight |
+| `sh264e_qemu_encoder_bench_*` | `cortex-m4` / `mps2-an386`, `cortex-m7` / `mps2-an500` | DSP-capable and `SH264E_DISABLE_ARM_DSP` | I420 caller-buffer progressive encoder preflight |
+| `sh264e_qemu_encoder_i420_stream_bench_*` | `cortex-m4` / `mps2-an386`, `cortex-m7` / `mps2-an500` | DSP-capable and `SH264E_DISABLE_ARM_DSP` | I420 streaming-consumer progressive encoder preflight |
+| `sh264e_qemu_encoder_nv12_bench_*` | `cortex-m4` / `mps2-an386`, `cortex-m7` / `mps2-an500` | DSP-capable and `SH264E_DISABLE_ARM_DSP` | NV12 caller-buffer progressive encoder preflight |
+| `sh264e_qemu_jpeg_stream_bench_*` | `cortex-m4` / `mps2-an386`, `cortex-m7` / `mps2-an500` | DSP-capable and `SH264E_DISABLE_ARM_DSP` | JPEG MCU-row streaming exact 2x resize/encode preflight |
+| `sh264e_qemu_jpeg_stream_half_bench_*` | `cortex-m4` / `mps2-an386`, `cortex-m7` / `mps2-an500` | DSP-capable and `SH264E_DISABLE_ARM_DSP` | JPEG MCU-row streaming exact 0.5x resize/encode preflight |
 
 QEMU validates firmware build/run behavior and stable nonzero `sh264e_bench_checksum`. Treat `sh264e_bench_cycles` from QEMU as a preflight signal only; final tuning-quality cycle counts still need real Cortex-M hardware with documented CPU, clock, compiler flags, cache state, and memory placement.
 Optional QEMU proxy timing is limited to repeated host/QEMU wall-time trend
