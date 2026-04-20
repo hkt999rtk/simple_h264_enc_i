@@ -189,6 +189,10 @@ fixed I_NxN macroblock prefix into constant bit writes while leaving
 `first_mb_in_slice`, coded block pattern, and residual syntax on their variable
 paths. Unaligned CAVLC and RBSP trailing-bit writes still preserve the same
 MSB-first bit order and byte output.
+The luma DC-only residual writer now uses the fixed unavailable-neighbor
+`nC=0` coeff-token codes directly instead of selecting a CAVLC coeff-token
+table at runtime. No lookup table was added, so the change does not move data
+into SRAM or `.rodata`.
 
 The JPEG/output-consumer streaming path now writes each completed IDR
 macroblock-slice RBSP byte directly through the Annex B emulation-prevention

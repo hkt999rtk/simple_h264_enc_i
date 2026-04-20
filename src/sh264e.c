@@ -2659,46 +2659,12 @@ static void encode_chroma8x8_dc_pair(sh264e_encoder_t *encoder,
     out_chroma_dc[1] = encode_chroma8x8_dc(encoder, slice, 2u, mb_x, 0u, 0u);
 }
 
-static unsigned cavlc_coeff_token_table_for_nc(unsigned nC)
-{
-    if (nC < 2u) {
-        return 0u;
-    }
-    if (nC < 4u) {
-        return 1u;
-    }
-    if (nC < 8u) {
-        return 2u;
-    }
-    return 3u;
-}
-
-static void write_coeff_token_one_or_zero(sh264e_bit_writer_t *bw, int has_coeff, unsigned nC)
-{
-    static const uint8_t len[4][2] = {
-        {1, 6},
-        {2, 6},
-        {4, 6},
-        {6, 6}
-    };
-    static const uint8_t bits[4][2] = {
-        {1, 5},
-        {3, 11},
-        {15, 15},
-        {3, 0}
-    };
-    const unsigned table = cavlc_coeff_token_table_for_nc(nC);
-    const unsigned index = has_coeff != 0 ? 1u : 0u;
-
-    bw_write_bits(bw, bits[table][index], len[table][index]);
-}
-
 static int write_cavlc_level(sh264e_bit_writer_t *bw, int level);
 
-static void write_luma_residual_dc_only(sh264e_bit_writer_t *bw, int level, unsigned nC)
+static void write_luma_residual_dc_only_nc0(sh264e_bit_writer_t *bw, int level)
 {
     if (level == 0) {
-        write_coeff_token_one_or_zero(bw, 0, nC);
+        bw_write_bit(bw, 1);             /* TotalCoeff=0 for fixed nC=0 luma */
         return;
     }
     if (level == 1) {
@@ -2706,7 +2672,7 @@ static void write_luma_residual_dc_only(sh264e_bit_writer_t *bw, int level, unsi
     } else if (level == -1) {
         level = -2;
     }
-    write_coeff_token_one_or_zero(bw, 1, nC);
+    bw_write_bits(bw, 0x05u, 6);         /* TotalCoeff=1, TrailingOnes=0 for nC=0 */
     if (!write_cavlc_level(bw, level)) {
         bw->error = 1;
         return;
@@ -2809,7 +2775,7 @@ static sh264e_status_t write_idr_mb_slice_payload(sh264e_encoder_t *encoder,
         bw_write_bit(bw, 1);                     /* mb_qp_delta: se(0) */
         for (b = 0; b < 16u; b++) {
             if ((cbp_luma & (1u << (b / 4u))) != 0u) {
-                write_luma_residual_dc_only(bw, levels[b], 0u);
+                write_luma_residual_dc_only_nc0(bw, levels[b]);
             }
         }
         if (cbp_chroma != 0u) {
