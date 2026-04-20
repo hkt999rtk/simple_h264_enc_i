@@ -22,6 +22,18 @@
 #define SRC_CHROMA_ROWS (SRC_LUMA_ROWS / 2u)
 #define WORK_SIZE ((size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_LUMA_HEIGHT + \
                    (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT)
+#define FNV1A_OFFSET 2166136261u
+#define FNV1A_PRIME 16777619u
+
+#if SH264E_QEMU_SCALER_BYPASS
+#define EXPECTED_CHECKSUM 0x0c2f7d05u
+#elif SH264E_QEMU_SCALER_HALF
+#define EXPECTED_CHECKSUM 0x85f66d05u
+#elif SH264E_QEMU_SCALER_GENERAL
+#define EXPECTED_CHECKSUM 0x8b3bf894u
+#else
+#define EXPECTED_CHECKSUM 0x6e421d33u
+#endif
 
 #define DEMCR (*(volatile uint32_t *)0xE000EDFCu)
 #define DWT_CTRL (*(volatile uint32_t *)0xE0001000u)
@@ -81,6 +93,32 @@ static uint32_t dwt_stop(void)
     return DWT_CYCCNT;
 }
 
+static uint32_t checksum_bytes(uint32_t checksum, const uint8_t *data, size_t size)
+{
+    size_t i;
+
+    for (i = 0; i < size; i++) {
+        checksum ^= data[i];
+        checksum *= FNV1A_PRIME;
+    }
+    return checksum;
+}
+
+static uint32_t checksum_slice(uint32_t checksum, const sh264e_slice_t *slice)
+{
+    checksum = checksum_bytes(checksum,
+                              slice->plane[0],
+                              (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_LUMA_HEIGHT);
+    checksum = checksum_bytes(checksum,
+                              slice->plane[1],
+                              (size_t)SH264E_V1_WIDTH * SH264E_V1_SLICE_CHROMA_HEIGHT);
+    checksum ^= (uint32_t)slice->stride[0];
+    checksum *= FNV1A_PRIME;
+    checksum ^= (uint32_t)slice->stride[1];
+    checksum *= FNV1A_PRIME;
+    return checksum;
+}
+
 static int run_benchmark(void)
 {
     sh264e_frame_t frame;
@@ -93,7 +131,7 @@ static int run_benchmark(void)
         WORK_SIZE;
 #endif
     uint32_t iter;
-    uint32_t checksum = 2166136261u;
+    uint32_t checksum = FNV1A_OFFSET;
 
     memset(&frame, 0, sizeof(frame));
     frame.width = SRC_W;
@@ -120,19 +158,22 @@ static int run_benchmark(void)
                                      work_ptr, work_capacity, &slice) != SH264E_OK) {
             return 3;
         }
-        checksum ^= slice.plane[0][iter * 97u];
-        checksum *= 16777619u;
-        checksum ^= slice.plane[1][iter * 53u];
-        checksum *= 16777619u;
-        checksum ^= (uint32_t)slice.stride[0];
-        checksum *= 16777619u;
-        checksum ^= (uint32_t)slice.stride[1];
-        checksum *= 16777619u;
     }
     sh264e_bench_cycles = dwt_stop();
+
+    for (iter = 0; iter < BENCH_ITERS; iter++) {
+        uint8_t *work_ptr = expected_work_size == 0u ? NULL : work;
+        size_t work_capacity = expected_work_size == 0u ? 0u : sizeof(work);
+
+        if (sh264e_resize_make_slice(&frame, iter % SH264E_V1_SLICE_COUNT,
+                                     work_ptr, work_capacity, &slice) != SH264E_OK) {
+            return 3;
+        }
+        checksum = checksum_slice(checksum, &slice);
+    }
     sh264e_bench_checksum = checksum;
 
-    if (checksum == 0u) {
+    if (checksum != EXPECTED_CHECKSUM) {
         return 4;
     }
     return 0;

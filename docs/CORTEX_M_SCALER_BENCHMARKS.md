@@ -15,20 +15,24 @@ source rows reached by the measured slice window, so benchmark-only buffers do
 not represent library persistent SRAM. Each run generates `BENCH_ITERS` encoder
 slices and writes:
 
-* `sh264e_bench_checksum` - nonzero correctness guard for the generated slices.
+* `sh264e_bench_checksum` - fixed expected checksum for the generated slices.
 * `sh264e_bench_cycles` - DWT cycle count around the resize loop.
 
 Portable and DSP builds must produce the same checksum for the same target
 fixture. Treat a checksum mismatch as a correctness failure before comparing
 cycles.
 
-Scaler QEMU benchmark checksums should be fixed per target and variant once the
-fixture is stable. The checksum should cover the full generated slice output, or
-an equivalently strong deterministic byte stream, so QEMU catches phase, edge,
-and row-index regressions instead of merely proving that some output was
-produced. Sparse nonzero checksums are acceptable only for temporary bring-up
-firmware and should not be the final correctness gate for scaler optimization
-issues.
+Scaler QEMU benchmark checksums are fixed per target and cover the full
+generated luma plus NV12 chroma slice output for the measured slice window. This
+lets QEMU catch phase, edge, and row-index regressions instead of merely proving
+that some output was produced. Expected values are:
+
+| Scaler fixture | Expected checksum |
+| --- | --- |
+| 1:1 bypass | `0x0c2f7d05` |
+| Exact `1280x720 -> 2560x1440` 2x | `0x6e421d33` |
+| Exact `5120x2880 -> 2560x1440` 0.5x | `0x85f66d05` |
+| General `1920x1080 -> 2560x1440` bilinear | `0x8b3bf894` |
 
 ## Encoder Scope
 
