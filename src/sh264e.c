@@ -111,6 +111,7 @@ typedef struct sh264e_jpeg_stream_component_t {
     uint32_t width;
     uint32_t height;
     uint32_t row0;
+    uint32_t row_slot0;
     uint32_t rows;
     uint32_t cache_rows;
     uint32_t rows_per_mcu;
@@ -1015,9 +1016,11 @@ static void jpeg_fill_nv12_neutral_chroma(uint8_t *dst_uv)
     }
 }
 
-static const uint8_t *streaming_component_row_ptr(const sh264e_jpeg_stream_component_t *src,
-                                                  uint32_t y)
+static uint8_t *streaming_component_row_ptr(const sh264e_jpeg_stream_component_t *src,
+                                            uint32_t y)
 {
+    uint32_t slot;
+
     if (y < src->row0) {
         y = src->row0;
     }
@@ -1025,7 +1028,14 @@ static const uint8_t *streaming_component_row_ptr(const sh264e_jpeg_stream_compo
     if (y >= src->rows) {
         y = src->rows - 1u;
     }
-    return src->pixels + (size_t)y * (size_t)src->stride;
+    if (src->cache_rows == 0u) {
+        return src->pixels + (size_t)y * (size_t)src->stride;
+    }
+    slot = src->row_slot0 + y;
+    if (slot >= src->cache_rows) {
+        slot -= src->cache_rows;
+    }
+    return src->pixels + (size_t)slot * (size_t)src->stride;
 }
 
 static void streaming_scale_component_exact_slice(const sh264e_jpeg_stream_component_t *src,
@@ -1324,9 +1334,9 @@ static void streaming_make_i420_slice(const sh264e_jpeg_stream_context_t *ctx,
         const uint32_t luma_row = (uint32_t)slice_index * SH264E_V1_SLICE_LUMA_HEIGHT;
         const uint32_t chroma_row = (uint32_t)slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT;
 
-        slice->plane[0] = y->pixels + (size_t)(luma_row - y->row0) * (size_t)y->stride;
-        slice->plane[1] = cb->pixels + (size_t)(chroma_row - cb->row0) * (size_t)cb->stride;
-        slice->plane[2] = cr->pixels + (size_t)(chroma_row - cr->row0) * (size_t)cr->stride;
+        slice->plane[0] = streaming_component_row_ptr(y, luma_row);
+        slice->plane[1] = streaming_component_row_ptr(cb, chroma_row);
+        slice->plane[2] = streaming_component_row_ptr(cr, chroma_row);
         slice->stride[0] = y->stride;
         slice->stride[1] = cb->stride;
         slice->stride[2] = cr->stride;
@@ -1382,9 +1392,9 @@ static void streaming_make_nv12_slice(const sh264e_jpeg_stream_context_t *ctx,
         const uint32_t chroma_row = (uint32_t)slice_index * SH264E_V1_SLICE_CHROMA_HEIGHT;
 
         slice->pixfmt = SH264E_PIXFMT_I420;
-        slice->plane[0] = y->pixels + (size_t)(luma_row - y->row0) * (size_t)y->stride;
-        slice->plane[1] = cb->pixels + (size_t)(chroma_row - cb->row0) * (size_t)cb->stride;
-        slice->plane[2] = cr->pixels + (size_t)(chroma_row - cr->row0) * (size_t)cr->stride;
+        slice->plane[0] = streaming_component_row_ptr(y, luma_row);
+        slice->plane[1] = streaming_component_row_ptr(cb, chroma_row);
+        slice->plane[2] = streaming_component_row_ptr(cr, chroma_row);
         slice->stride[0] = y->stride;
         slice->stride[1] = cb->stride;
         slice->stride[2] = cr->stride;
@@ -1489,6 +1499,7 @@ static sh264e_status_t streaming_init_cache(sh264e_jpeg_stream_context_t *ctx)
         component->stride = (ptrdiff_t)stride;
         component->rows_per_mcu = (uint32_t)rows_per_mcu;
         component->row0 = 0u;
+        component->row_slot0 = 0u;
         component->rows = 0u;
         component->cache_rows = ctx->one_to_one_420
                                     ? component->rows_per_mcu
@@ -1546,15 +1557,33 @@ static sh264e_status_t streaming_copy_current_mcu_row(sh264e_jpeg_stream_context
             if (drop_rows == 0u || drop_rows > component->rows) {
                 return SH264E_ERR_INTERNAL;
             }
-            memmove(component->pixels,
-                    component->pixels + (size_t)drop_rows * (size_t)component->stride,
-                    (size_t)(component->rows - drop_rows) * (size_t)component->stride);
             component->row0 += drop_rows;
+            component->row_slot0 += drop_rows;
+            if (component->row_slot0 >= component->cache_rows) {
+                component->row_slot0 -= component->cache_rows;
+            }
             component->rows -= drop_rows;
         }
-        memcpy(component->pixels + (size_t)component->rows * (size_t)component->stride,
-               src,
-               (size_t)rows_to_copy * (size_t)component->stride);
+        {
+            uint32_t write_slot = component->row_slot0 + component->rows;
+            uint32_t first_rows;
+
+            if (write_slot >= component->cache_rows) {
+                write_slot -= component->cache_rows;
+            }
+            first_rows = component->cache_rows - write_slot;
+            if (first_rows > rows_to_copy) {
+                first_rows = rows_to_copy;
+            }
+            memcpy(component->pixels + (size_t)write_slot * (size_t)component->stride,
+                   src,
+                   (size_t)first_rows * (size_t)component->stride);
+            if (first_rows < rows_to_copy) {
+                memcpy(component->pixels,
+                       src + (size_t)first_rows * (size_t)component->stride,
+                       (size_t)(rows_to_copy - first_rows) * (size_t)component->stride);
+            }
+        }
         component->rows += rows_to_copy;
     }
     return SH264E_OK;
