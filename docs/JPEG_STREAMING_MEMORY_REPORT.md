@@ -131,6 +131,9 @@ representative JPEG fixtures. It also keeps broader color-subsampling coverage
 that fails if the production arena path regresses to full component-plane
 allocation or if the default JPEG tool path regresses to allocating
 `sh264e_get_max_output_size()` for H.264 output.
+The ffmpeg integration suite also includes a `1920x1080 -> 2560x1440` 4:2:0
+JPEG fixture so non-exact-ratio MCU-row streaming resize remains covered for
+both I420 and NV12 output without allocating full decoded component planes.
 
 The source-input stress cases feed generated JPEGs through chunk limits of 1, 2,
 7, 64, and 1024 bytes. Those cases force marker parsing and entropy decode

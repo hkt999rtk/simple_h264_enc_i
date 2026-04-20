@@ -260,6 +260,10 @@ without adding persistent x-map storage or slice-work memory.
 The JPEG MCU-row streaming path now uses the same exact-ratio quarter-step
 sampler for matching 2x and 0.5x source JPEGs while preserving the 1:1
 zero-slice-work path and rolling row-cache behavior.
+For non-exact-ratio JPEG dimensions, the MCU-row streaming scaler uses the same
+row-level general x-loop structure as the raw scaler, including direct
+fixed-point x-state advancement for the unclamped middle span and separate
+clamped-edge handling for I420 and NV12 output.
 The exact-ratio blend now uses quarter-step integer weights. DSP-capable ARM
 builds use `smlad` where it remains useful for exact-ratio pair sums, while the
 2x and 0.5x fixed phases reuse portable 32-bit partial sums before the final
