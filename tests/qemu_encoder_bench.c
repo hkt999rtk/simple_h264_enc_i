@@ -76,6 +76,17 @@ void *memset(void *dst, int value, size_t size)
     return dst;
 }
 
+void *memcpy(void *dst, const void *src, size_t size)
+{
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    while (size > 0u) {
+        *d++ = *s++;
+        size--;
+    }
+    return dst;
+}
+
 static uint32_t checksum_bytes(uint32_t checksum, const uint8_t *data, size_t size)
 {
     size_t i;
