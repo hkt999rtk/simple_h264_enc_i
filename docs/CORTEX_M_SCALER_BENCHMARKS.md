@@ -151,6 +151,18 @@ ARM toolchain cannot build those ELFs, record the missing-tool output with the
 host CTest result and let the Ubuntu QEMU validation remain the correctness
 preflight.
 
+For the exact-ratio row-kernel scaler optimization, compare the before/after
+trend using the scaler exact 2x rows
+`sh264e_qemu_scaler_bench_m4`, `sh264e_qemu_scaler_bench_m4_portable`,
+`sh264e_qemu_scaler_bench_m7`, and
+`sh264e_qemu_scaler_bench_m7_portable`; the scaler exact 0.5x rows
+`sh264e_qemu_scaler_half_bench_m4`,
+`sh264e_qemu_scaler_half_bench_m4_portable`,
+`sh264e_qemu_scaler_half_bench_m7`, and
+`sh264e_qemu_scaler_half_bench_m7_portable`; plus the JPEG streaming exact 2x
+and 0.5x rows. The optimization is expected to move exact-ratio scaler rows
+while leaving 1:1 bypass and general bilinear rows as controls.
+
 ## Simulator DWT And WFI Profile
 
 Use `docs/CORTEX_M_SIMULATOR_PROFILE.md` when validating local macOS simulator
