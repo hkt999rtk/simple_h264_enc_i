@@ -87,7 +87,7 @@ jobs:
             --output-dir build/freertos-cortex-m7-packages
 
       - name: Upload FreeRTOS Cortex-M7 developer packages
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: freertos-cortex-m7-packages-${{ github.sha }}
           path: |
